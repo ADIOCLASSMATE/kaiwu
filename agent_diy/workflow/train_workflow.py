@@ -118,6 +118,51 @@ class EpisodeRunner:
                 f"Agent[{agent_idx}] init_config: camp={camp_key}, select_skills={select_skills}"
             )
 
+    def _episode_outcome(self, observation, monitor_side):
+        """从最后一帧提取 monitor_side 的终局结果指标。
+
+        胜负判定按外塔(sub_type=21)存活：己方塔存活且敌方塔被毁 → 胜(1)；
+        反之为负(0)；双方塔都在（超时）→ 平(0.5)。同时上报英雄终局养成数据。
+        """
+        out = {}
+        TOWER_SUBTYPE = 21
+        try:
+            fs = observation[str(monitor_side)]["frame_state"]
+        except (KeyError, TypeError):
+            return out
+
+        my_hero = None
+        my_camp = observation[str(monitor_side)].get("camp")
+        for h in fs.get("hero_states", []):
+            if h.get("camp") == my_camp:
+                my_hero = h
+
+        if my_hero is not None:
+            out["final_level"] = my_hero.get("level", 0)
+            out["final_money"] = my_hero.get("money", 0)
+            out["kill_cnt"] = my_hero.get("kill_cnt", 0)
+            out["dead_cnt"] = my_hero.get("dead_cnt", 0)
+            mh = my_hero.get("max_hp", 0) or 1
+            out["final_hp_ratio"] = round(my_hero.get("hp", 0) / mh, 3)
+
+        own_tower_alive = enemy_tower_alive = False
+        for npc in fs.get("npc_states", []):
+            if npc.get("sub_type") != TOWER_SUBTYPE:
+                continue
+            alive = npc.get("hp", 0) > 0
+            if npc.get("camp") == my_camp:
+                own_tower_alive = own_tower_alive or alive
+            else:
+                enemy_tower_alive = enemy_tower_alive or alive
+
+        if own_tower_alive and not enemy_tower_alive:
+            out["win"] = 1.0
+        elif enemy_tower_alive and not own_tower_alive:
+            out["win"] = 0.0
+        else:
+            out["win"] = 0.5
+        return out
+
     def run_episodes(self):
         # Single environment process
         # 单局流程
@@ -171,6 +216,14 @@ class EpisodeRunner:
             is_train_test = os.environ.get("is_train_test", "False").lower() == "true"
             self.logger.info(f"Episode {self.episode_cnt} start, usr_conf is {usr_conf}")
 
+            # ---- 监控统计累加器（仅追踪 monitor_side，按局聚合）----
+            # reward 子项累计 + distance shaping 触发计数 + 动作类型计数。
+            reward_item_sum = {}          # 各 reward 子项的整局累计值
+            out_of_range_cnt = 0          # 越程攻击触发次数
+            out_of_range_sum = 0.0        # 越程惩罚累计（负值）
+            attack_action_cnt = 0         # 攻击类 action 次数
+            decision_cnt = 0              # monitor_side 实际决策帧数
+
             # Reward initialization
             # 回报初始化
             for i, (do_sample, agent) in enumerate(zip(self.do_samples, self.agents)):
@@ -183,6 +236,8 @@ class EpisodeRunner:
                 # Initialize the default actions. If the agent does not make a decision, env.step uses the default action.
                 # 初始化默认的actions，如果智能体不进行决策，则env.step使用默认action
                 actions = [NONE_ACTION] * self.agent_num
+                # 记录每个 agent 做决策时所基于的 frame_state，用于 distance shaping
+                decided_frames = [None] * self.agent_num
 
                 for index, (do_predict, do_sample, agent) in enumerate(
                     zip(self.do_predicts, self.do_samples, self.agents)
@@ -196,6 +251,7 @@ class EpisodeRunner:
                         # Only sample when do_sample=True and is_eval=False
                         # 评估对局数据不采样，不是训练中最新模型产生的数据不采样
                         if not is_eval and do_sample:
+                            decided_frames[index] = observation[str(index)]["frame_state"]
                             frame = build_frame(agent, observation[str(index)])
                             frame_collector.save_frame(frame, agent_id=index)
 
@@ -218,8 +274,32 @@ class EpisodeRunner:
                 for i, (do_sample, agent) in enumerate(zip(self.do_samples, self.agents)):
                     if do_sample:
                         reward = agent.reward_manager.result(observation[str(i)]["frame_state"])
+                        # distance shaping：对「越程攻击」的 action 追加极小负奖励。
+                        # 课程式开关：OUT_OF_RANGE_PENALTY=0 时该项恒 0（自对弈阶段关闭）。
+                        if decided_frames[i] is not None:
+                            pen = agent.reward_manager.out_of_range_penalty(
+                                actions[i], decided_frames[i])
+                            if pen != 0.0:
+                                reward["out_of_range"] = pen
+                                reward["reward_sum"] += pen
                         observation[str(i)]["reward"] = reward
                         reward_sum_list[i] += reward["reward_sum"]
+
+                        # ---- 监控统计：只聚合 monitor_side ----
+                        if i == monitor_side:
+                            for k, v in reward.items():
+                                if k == "reward_sum":
+                                    continue
+                                reward_item_sum[k] = reward_item_sum.get(k, 0.0) + v
+                            act = actions[i]
+                            if act is not None and len(act) >= 6 and act[0] in GameConfig.ATTACK_BUTTONS:
+                                attack_action_cnt += 1
+                            if decided_frames[i] is not None:
+                                decision_cnt += 1
+                            p = reward.get("out_of_range", 0.0)
+                            if p != 0.0:
+                                out_of_range_cnt += 1
+                                out_of_range_sum += p
 
                 # Normal end or timeout exit, run train_test will exit early
                 # 正常结束或超时退出，运行train_test时会提前退出
@@ -241,8 +321,26 @@ class EpisodeRunner:
                     if now - self.last_report_monitor_time >= 60:
                         monitor_data = {"episode_cnt": self.episode_cnt}
                         if self.monitor:
-                            if is_eval:
-                                monitor_data["reward"] = round(reward_sum_list[monitor_side], 2)
+                            # 整局聚合指标（训练/评估均上报，便于横向对比）。
+                            monitor_data["reward"] = round(reward_sum_list[monitor_side], 2)
+                            monitor_data["episode_len"] = frame_no
+
+                            # reward 子项分解：看清回报由什么驱动，而非只看总和。
+                            for k, v in reward_item_sum.items():
+                                monitor_data["rwd_" + k] = round(v, 3)
+
+                            # distance shaping 监控：越程攻击次数 / 占攻击动作比例 / 惩罚累计。
+                            monitor_data["out_of_range_cnt"] = out_of_range_cnt
+                            monitor_data["out_of_range_sum"] = round(out_of_range_sum, 3)
+                            if attack_action_cnt > 0:
+                                monitor_data["out_of_range_rate"] = round(
+                                    out_of_range_cnt / attack_action_cnt, 4)
+                            monitor_data["attack_action_cnt"] = attack_action_cnt
+
+                            # 对局结果指标：从最后一帧取 monitor_side 英雄的终局状态。
+                            outcome = self._episode_outcome(observation, monitor_side)
+                            monitor_data.update(outcome)
+
                             self.monitor.put_data({os.getpid(): monitor_data})
                             self.last_report_monitor_time = now
 

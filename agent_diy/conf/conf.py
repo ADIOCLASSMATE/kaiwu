@@ -32,7 +32,7 @@ agent_diy 增强版配置（v2）。
 
 
 class GameConfig:
-    # 各奖励子项权重，在 reward_manager 中使用（10 子项稠密奖励）。
+    # 各奖励子项权重，在 reward_manager 中使用（11 子项稠密奖励）。
     REWARD_WEIGHT_DICT = {
         "tower_hp_point": 5.0,      # 推塔（判定胜负的外塔 sub_type=21），零和
         "enemy_tower_hp": 4.0,      # 敌方外塔血量下降的正向激励，零和
@@ -42,11 +42,30 @@ class GameConfig:
         "death": -1.0,              # 死亡数差（权重为负，越少越好），零和
         "money": 0.6,               # 经济差，零和
         "exp": 0.6,                 # 经验差，零和
-        "forward": 0.05,            # 向敌方塔前进（仅满血时计算），非零和
-        "last_hit": 0.5,            # 对小兵的最后一击（击杀小兵收益），非零和
+        "forward": 0.05,            # 向敌方塔站位（HP 越高权重越大），非零和
+        "last_hit": 0.5,            # 补刀收益差分，非零和
+        # 挂机惩罚：长时间零产出 *且* 不在回撤/泉水区时才罚。权重为负，非零和。
+        "idle_penalty": -0.15,
     }
     TIME_SCALE_ARG = 0
     MODEL_SAVE_INTERVAL = 1800
+
+    # ---- 越程攻击惩罚（distance shaping，与 action 相关，独立于上面的帧差子项）----
+    OUT_OF_RANGE_PENALTY = 0.01      # 量级 ~ forward(0.05) 的 1/5；设 0 关闭
+    ATTACK_BUTTONS = (3, 4, 5, 6, 8, 10, 11)
+
+    # ---- 挂机检测参数（纯产出停滞判据）----
+    # 判据：经济(money_cnt)与对英雄伤害(total_hurt_to_hero)帧间增量同时停滞 → 累计 inactive。
+    # 叠加「非回城/非泉水」豁免（冻结计数而非清零）：在己方塔后方的安全回撤/泉水区不罚。
+    IDLE_GRACE_FRAMES = 150          # 宽限期（帧，~5s）：赶路/等 CD/补刀间隙不罚
+    IDLE_RAMP_FRAMES = 600           # 爬升期（帧，~20s）：从 0 线性到满额惩罚
+    IDLE_MAX_VALUE = 1.0             # idle_penalty value 封顶：防累积成巨额负悬崖
+    # 回撤/泉水豁免：英雄到敌方外塔的距离 > (己方外塔到敌方外塔距离 × 此比例) 时，
+    # 视为在己方塔后方安全区（回血/回城/泉水），冻结挂机计数。1.0=己方塔位置，
+    # >1.0 表示更靠后。设为 1.05 给己方塔身前一点余量仍算"在场"。
+    IDLE_RETREAT_RATIO = 1.05
+    # forward 反 hack：处于敌方外塔攻击范围内时不发前压奖励。
+    FORWARD_NO_REWARD_IN_ENEMY_TOWER = True
 
 
 class FeatureConfig:
@@ -61,9 +80,24 @@ class FeatureConfig:
     HERO_ID_ONEHOT_DIM = len(HERO_CONFIG_IDS) + 1   # +unknown
 
     # ---- 技能槽 ----
-    SKILL_SLOT_TYPES = [0, 1, 2, 3, 4, 5, 6]
+    # 实测 slot_type ∈ {0,1,2,3,5,6,7}：
+    #   0-3 = 本命技能（被动/普攻 + 三主动，英雄 config_id 可推，不再单独编码 configId）
+    #   4   = 第4技能（仅特定英雄有效；当前英雄池无 4 技能，留恒零槽以便扩英雄池不改维度）
+    #   5   = 回城 (configId=90003，英雄无关，无需编码 configId)
+    #   6   = 召唤师技能 (同一英雄不同局可带不同技能，英雄 config_id 推不出 → 必须编码)
+    #   7   = 装备技能 (configId=90005，英雄无关，无需编码 configId)
+    # 每槽基础 3 维：usable, cd_remaining_ratio(cooldown/cooldown_max), level_ratio。
+    # 仅召唤师槽(6) 额外拼一个 (len(SUMMONER_SKILL_IDS)+1) 维 one-hot（+unknown）。
+    SKILL_SLOT_TYPES = [0, 1, 2, 3, 4, 5, 6, 7]
     SKILL_FEAT_PER_SLOT = 3
-    SKILL_DIM = len(SKILL_SLOT_TYPES) * SKILL_FEAT_PER_SLOT   # 21
+    SUMMONER_SLOT_TYPE = 6
+
+    # 召唤师技能池（single source of truth；agent.py 选技能 / builder 编码共用）。
+    SUMMONER_SKILL_IDS = [80102, 80109, 80104, 80108, 80110,
+                          80105, 80103, 80107, 80121, 80115]
+    SUMMONER_ONEHOT_DIM = len(SUMMONER_SKILL_IDS) + 1   # +unknown，= 11
+
+    SKILL_DIM = len(SKILL_SLOT_TYPES) * SKILL_FEAT_PER_SLOT + SUMMONER_ONEHOT_DIM   # 8*3 + 11 = 35
 
     # ---- token 通用状态块（解耦后的 present）----
     # 所有 token 第 0 维都是 exists（padding 位）。其余状态位按实体类型不同：
@@ -85,9 +119,9 @@ class FeatureConfig:
         + 2                    # mov_spd, atk_spd 软饱和
         + 3                    # crit_rate, crit_effe, phy_vamp（万分比 /1e4）
         + 2                    # hp_recover, ep_recover 软饱和
-        + SKILL_DIM            # 21
+        + SKILL_DIM            # 35 (8 槽 × 3 + 召唤师 one-hot 11)
         + 2                    # in_enemy_tower_range, enemy_in_my_atk_range
-    )                          # = 54
+    )                          # = 68
 
     # STRUCT_DIM: 状态块(4) + hp_ratio(1) + rel_pos(2) + abs_pos(2) + dist(1)
     #             + attack_range_soft(1) + main_in_range(1)

@@ -22,7 +22,7 @@ from torch.optim.lr_scheduler import LambdaLR
 
 from agent_diy.model.model import Model
 from agent_diy.feature.definition import *
-from agent_diy.conf.conf import Config
+from agent_diy.conf.conf import Config, FeatureConfig
 from agent_diy.feature.reward_process import GameRewardManager
 from agent_diy.algorithm.algorithm import Algorithm
 from agent_diy.feature.feature_process import FeatureProcess
@@ -32,7 +32,8 @@ SUMMONER_SKILL_MAP = {
     80102: "治疗", 80109: "疾跑", 80104: "惩击", 80108: "终结", 80110: "狂暴",
     80105: "干扰", 80103: "晕眩", 80107: "净化", 80121: "弱化", 80115: "闪现",
 }
-SUMMONER_SKILL_IDS = list(SUMMONER_SKILL_MAP.keys())
+# 技能池以 FeatureConfig 为唯一真源，保证「选技能」与「特征 one-hot」对齐。
+SUMMONER_SKILL_IDS = FeatureConfig.SUMMONER_SKILL_IDS
 
 
 class Agent(BaseAgent):

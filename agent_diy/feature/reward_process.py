@@ -6,14 +6,21 @@
 """
 Author: Tencent AI Arena Authors
 
-10 子项稠密奖励管理器。
+11 子项稠密奖励管理器。
 
 零和子项（主-敌之差的帧间增量）：
   tower_hp_point, enemy_tower_hp, hp_point, ep_rate, kill, death, money, exp
 非零和子项（仅主视角）：
-  forward（向敌方塔前进，仅满血时计算）、last_hit（击杀小兵的最后一击近似）
+  forward（向敌方塔站位，HP 越高权重越大；处于敌塔范围内不给，防贴脸白嫖）、
+  last_hit（补刀收益差分）、
+  idle_penalty（挂机惩罚：经济/伤害产出停滞且不在回撤/泉水区时累计，权重为负）
 
 判定胜负的塔 = 外塔 sub_type=21（reward 按它跟踪）。二塔(24)/水晶(23) 不参与。
+
+注意（设计权衡，非 bug）：
+  补一个兵会同时抬升 money_cnt（→ last_hit）与 money（→ money 子项），即补刀
+  被 last_hit 与 money 各计一次。这是有意放大补刀吸引力；若发现过度刷线不打架，
+  优先调小 last_hit 权重。
 """
 
 import math
@@ -43,7 +50,13 @@ def init_calc_frame_map():
 
 
 # 非零和子项：直接用主视角值，不做主-敌相减。
-NON_ZERO_SUM = {"forward", "last_hit"}
+NON_ZERO_SUM = {"forward", "last_hit", "idle_penalty"}
+
+# ---- 挂机检测参数（从 GameConfig 读取，集中管理）----
+IDLE_GRACE_FRAMES = GameConfig.IDLE_GRACE_FRAMES
+IDLE_RAMP_FRAMES = GameConfig.IDLE_RAMP_FRAMES
+IDLE_RETREAT_RATIO = GameConfig.IDLE_RETREAT_RATIO
+IDLE_MAX_VALUE = GameConfig.IDLE_MAX_VALUE
 
 
 class GameRewardManager:
@@ -55,6 +68,10 @@ class GameRewardManager:
         self.m_main_calc_frame_map = init_calc_frame_map()
         self.m_enemy_calc_frame_map = init_calc_frame_map()
         self.time_scale_arg = GameConfig.TIME_SCALE_ARG
+        # 挂机检测：跟踪产出类累计值的上帧快照
+        self._last_money_cnt = 0.0
+        self._last_hurt_to_hero = 0.0
+        self._inactive_frames = 0
 
     def result(self, frame_data):
         self.frame_data_process(frame_data)
@@ -64,6 +81,78 @@ class GameRewardManager:
             for key in self.m_reward_value:
                 self.m_reward_value[key] *= math.pow(0.6, 1.0 * frame_no / self.time_scale_arg)
         return self.m_reward_value
+
+    def out_of_range_penalty(self, action, decided_frame_state):
+        """越程攻击惩罚（distance shaping）。
+
+        action = [button, move_x, move_z, skill_x, skill_z, target]
+        decided_frame_state = 做出该 action 时所基于的 frame_state（即上一帧）。
+        返回 <= 0 的标量；只在「攻击类 button + target 指向可解析实体 + 目标在
+        主英雄攻击范围外」时为负，其余为 0。权重设 0（OUT_OF_RANGE_PENALTY=0）时恒 0。
+        """
+        w = GameConfig.OUT_OF_RANGE_PENALTY
+        if w <= 0 or action is None or len(action) < 6:
+            return 0.0
+        button, target = action[0], action[5]
+        if button not in GameConfig.ATTACK_BUTTONS:
+            return 0.0
+        # target 槽：0 None / 1 EnemyHero / 2 Self / 3-6 Soldier / 7 Tower / 8 Monster
+        # 只对「敌英雄 / 小兵」做越程判定（Self/None/Tower/Monster 不罚）。
+        if target == 1:
+            tpos = self._enemy_hero_pos(decided_frame_state)
+        elif 3 <= target <= 6:
+            tpos = self._nth_enemy_minion_pos(decided_frame_state, target - 3)
+        else:
+            return 0.0
+        if tpos is None:
+            return 0.0
+        mh = self._main_hero(decided_frame_state)
+        if mh is None:
+            return 0.0
+        mpos = (mh["location"]["x"], mh["location"]["z"])
+        atk_range = float(mh.get("attack_range", 0) or 0)
+        if atk_range <= 0:
+            return 0.0
+        dist = math.hypot(tpos[0] - mpos[0], tpos[1] - mpos[1])
+        return -w if dist > atk_range else 0.0
+
+    # ---- distance shaping 辅助：定位主英雄 / 敌英雄 / 第 k 近敌方小兵 ----
+    def _main_hero(self, fs):
+        for h in fs.get("hero_states", []):
+            if h.get("runtime_id") == self.main_hero_player_id:
+                return h if not self._is_sentinel(h.get("location", {})) else None
+        return None
+
+    def _enemy_hero_pos(self, fs):
+        for h in fs.get("hero_states", []):
+            if h.get("runtime_id") != self.main_hero_player_id:
+                loc = h.get("location", {})
+                if self._is_sentinel(loc) or h.get("hp", 0) <= 0:
+                    return None
+                return (loc["x"], loc["z"])
+        return None
+
+    def _nth_enemy_minion_pos(self, fs, k):
+        mh = self._main_hero(fs)
+        if mh is None:
+            return None
+        mpos = (mh["location"]["x"], mh["location"]["z"])
+        mc = mh["camp"]
+        cand = []
+        for npc in fs.get("npc_states", []):
+            if npc.get("actor_type") == MINION_ACTOR_TYPE and npc.get("sub_type") == MINION_SUBTYPE \
+                    and npc.get("camp") != mc and npc.get("hp", 0) > 0:
+                loc = npc.get("location", {})
+                if self._is_sentinel(loc):
+                    continue
+                p = (loc["x"], loc["z"])
+                cand.append((math.hypot(p[0] - mpos[0], p[1] - mpos[1]), p))
+        cand.sort(key=lambda t: t[0])
+        return cand[k][1] if k < len(cand) else None
+
+    @staticmethod
+    def _is_sentinel(loc):
+        return abs(loc.get("x", 0)) >= SENTINEL or abs(loc.get("z", 0)) >= SENTINEL
 
     # ---- 工具 ----
     @staticmethod
@@ -118,25 +207,51 @@ class GameRewardManager:
                 _, enemy_tower = self._get_camp_units(frame_data, enemy_camp)
                 rs.cur_frame_value = self.calculate_forward(main_hero, main_tower, enemy_tower)
             elif reward_name == "last_hit":
-                # 近似：本帧己方小兵击杀数（hero money_cnt 增量在 get_reward 里按差分处理）。
-                # 直接用英雄 money_cnt 作累计指标，差分得「最近收益」。
+                # 近似：英雄 money_cnt（补刀累计）作累计指标，get_reward 里差分得「最近收益」。
                 rs.cur_frame_value = float(hero.get("money_cnt", 0)) / 100.0 if hero else 0.0
+            # idle_penalty 不在此设置 cur_frame_value（其值在 get_reward 里据 inactive 计数算）
 
     def calculate_forward(self, main_hero, main_tower, enemy_tower):
+        """英雄沿兵线的站位比例，HP 越高有效权重越大。
+
+        forward_raw ∈ [-0.2, 1.0]：0=在己方塔位，1=在敌方塔位。
+        乘以 hp_ratio：满血时鼓励前压，残血时自然减弱（撤退合理）。
+        反 hack：若处于敌方外塔攻击范围内，则不给前压奖励——否则满血贴脸敌塔
+        反复横跳即可零风险白嫖该奖励。
+        """
         if main_hero is None or main_tower is None or enemy_tower is None:
             return 0.0
         if abs(main_hero["location"]["x"]) >= SENTINEL:
             return 0.0
-        main_tower_pos = (main_tower["location"]["x"], main_tower["location"]["z"])
-        enemy_tower_pos = (enemy_tower["location"]["x"], enemy_tower["location"]["z"])
+
         hero_pos = (main_hero["location"]["x"], main_hero["location"]["z"])
-        forward_value = 0.0
-        dist_hero2emy = math.dist(hero_pos, enemy_tower_pos)
-        dist_main2emy = math.dist(main_tower_pos, enemy_tower_pos)
-        mh = main_hero.get("max_hp", 0) or 1
-        if main_hero["hp"] / mh > 0.99 and dist_main2emy > 0 and dist_hero2emy > dist_main2emy:
-            forward_value = (dist_main2emy - dist_hero2emy) / dist_main2emy
-        return forward_value
+        own_pos = (main_tower["location"]["x"], main_tower["location"]["z"])
+        enemy_pos = (enemy_tower["location"]["x"], enemy_tower["location"]["z"])
+
+        # 反 hack：在敌方外塔攻击范围内不发前压奖励
+        if GameConfig.FORWARD_NO_REWARD_IN_ENEMY_TOWER:
+            etr = float(enemy_tower.get("attack_range", 0) or 0)
+            if etr > 0 and math.dist(hero_pos, enemy_pos) <= etr:
+                return 0.0
+
+        dist_hero_to_enemy = math.dist(hero_pos, enemy_pos)
+        dist_own_to_enemy = math.dist(own_pos, enemy_pos)
+        if dist_own_to_enemy <= 0:
+            return 0.0
+
+        # 0 = 贴着己方塔，1 = 贴着敌方塔
+        forward_raw = 1.0 - dist_hero_to_enemy / dist_own_to_enemy
+        # 轻量 clip：防止缩在泉水时产生极端负值
+        if forward_raw < -0.2:
+            forward_raw = -0.2
+        if forward_raw > 1.0:
+            forward_raw = 1.0
+
+        hp = main_hero.get("hp", 0)
+        max_hp = main_hero.get("max_hp", 1) or 1
+        hp_ratio = max(0.0, min(1.0, hp / max_hp))
+
+        return forward_raw * hp_ratio
 
     def frame_data_process(self, frame_data):
         main_camp, enemy_camp = -1, -1
@@ -148,6 +263,72 @@ class GameRewardManager:
                 enemy_camp = hero["camp"]
         self.set_cur_calc_frame_vec(self.m_main_calc_frame_map, frame_data, main_camp)
         self.set_cur_calc_frame_vec(self.m_enemy_calc_frame_map, frame_data, enemy_camp)
+        # 挂机检测：基于经济/伤害产出（非位置）+ 回撤区豁免
+        self._update_inactive(frame_data, main_camp)
+
+    def _in_retreat_zone(self, frame_data, hero, main_camp):
+        """英雄是否在己方塔后方的安全回撤/泉水区（回血/回城）。
+
+        几何判据：到敌方外塔的距离 > 己方外塔到敌方外塔距离 × IDLE_RETREAT_RATIO。
+        即英雄比自家塔还靠后（朝己方泉水方向）。这天然涵盖「在泉水回血」与
+        「在安全后方回城」两种不该被罚的场景，且不依赖未公开的 behav_mode 编码。
+        """
+        hloc = hero.get("location", {})
+        if self._is_sentinel(hloc):
+            return True   # 取不到位置时保守不罚
+        _, own_tower = self._get_camp_units(frame_data, main_camp)
+        enemy_camp = 2 if main_camp == 1 else 1
+        _, enemy_tower = self._get_camp_units(frame_data, enemy_camp)
+        if own_tower is None or enemy_tower is None:
+            return False
+        otl = own_tower.get("location", {})
+        etl = enemy_tower.get("location", {})
+        if self._is_sentinel(otl) or self._is_sentinel(etl):
+            return False
+        hpos = (hloc["x"], hloc["z"])
+        opos = (otl["x"], otl["z"])
+        epos = (etl["x"], etl["z"])
+        dist_hero_to_enemy = math.hypot(hpos[0] - epos[0], hpos[1] - epos[1])
+        dist_own_to_enemy = math.hypot(opos[0] - epos[0], opos[1] - epos[1])
+        if dist_own_to_enemy <= 0:
+            return False
+        return dist_hero_to_enemy > dist_own_to_enemy * IDLE_RETREAT_RATIO
+
+    def _update_inactive(self, frame_data, main_camp):
+        """挂机计数更新（纯产出停滞 + 回撤/泉水冻结）：
+          - 真有产出（任一增量>0）→ 清零；
+          - 产出停滞 且 在回撤区（泉水回血/后方回城）→ 冻结（不增不减）；
+          - 产出停滞 且 不在回撤区 → 累加。
+        死亡（hero=None）也视为累加，鼓励尽快复活投入战斗。
+        冻结而非清零是关键：否则 agent 可踏进回撤区 1 帧归零、再出来发呆，
+        反复横跳永远凑不满宽限期，惩罚被绕过（与兵线原地抽搐同类漏洞）。
+        """
+        hero = None
+        for h in frame_data.get("hero_states", []):
+            if h.get("camp") == main_camp and h.get("hp", 0) > 0:
+                loc = h.get("location", {})
+                if not self._is_sentinel(loc):
+                    hero = h
+                    break
+
+        if hero is None:
+            self._inactive_frames += 1
+            return
+
+        cur_money = float(hero.get("money_cnt", 0))
+        cur_hurt = float(hero.get("total_hurt_to_hero", 0))
+        money_delta = cur_money - self._last_money_cnt
+        hurt_delta = cur_hurt - self._last_hurt_to_hero
+        self._last_money_cnt = cur_money
+        self._last_hurt_to_hero = cur_hurt
+
+        zero_output = (money_delta <= 0 and hurt_delta <= 0)
+        if not zero_output:
+            self._inactive_frames = 0
+            return
+        if self._in_retreat_zone(frame_data, hero, main_camp):
+            return    # 冻结，不增不减
+        self._inactive_frames += 1
 
     def get_reward(self, frame_data, reward_dict):
         reward_dict.clear()
@@ -166,6 +347,14 @@ class GameRewardManager:
             elif reward_name in NON_ZERO_SUM:
                 if reward_name == "forward":
                     rs.value = main.cur_frame_value
+                elif reward_name == "idle_penalty":
+                    # 产出停滞且不在回撤区的惩罚：宽限期后线性爬升，IDLE_MAX_VALUE 封顶。
+                    if self._inactive_frames > IDLE_GRACE_FRAMES:
+                        rs.value = min(
+                            (self._inactive_frames - IDLE_GRACE_FRAMES) / IDLE_RAMP_FRAMES,
+                            IDLE_MAX_VALUE)
+                    else:
+                        rs.value = 0.0
                 else:  # last_hit: 主视角差分
                     rs.value = max(0.0, main.cur_frame_value - main.last_frame_value)
             else:

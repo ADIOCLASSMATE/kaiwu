@@ -303,10 +303,16 @@ class FeatureBuilder:
 
     # ---- 技能 token ----
     def _skill_feature(self, hero):
+        """每槽 3 维 [usable, cd_remaining, level_ratio]，按 FC.SKILL_SLOT_TYPES 顺序。
+        额外：召唤师槽(SUMMONER_SLOT_TYPE) 的 configId one-hot（+unknown）拼在末尾。
+        本命技能(0-3)/回城(5)/装备(7) 的 configId 由英雄 config_id 决定或全局唯一，
+        是冗余信息，不编码。
+        """
         slots = {}
         ss = hero.get("skill_state", {}) or {}
         for s in ss.get("slot_states", []) or []:
             slots[s.get("slot_type")] = s
+
         out = []
         for st in FC.SKILL_SLOT_TYPES:
             s = slots.get(st)
@@ -319,6 +325,14 @@ class FeatureBuilder:
             cd_remaining = _clip01(cd / cdmax) if cdmax > 0 else 0.0
             level_ratio = _clip01(s.get("level", 0) / 6.0)
             out += [usable, cd_remaining, level_ratio]
+
+        # 召唤师技能 one-hot（+unknown）：从召唤师槽的 configId 取
+        summoner = slots.get(FC.SUMMONER_SLOT_TYPE)
+        cid = summoner.get("configId") if summoner else None
+        onehot = [1.0 if cid == sid else 0.0 for sid in FC.SUMMONER_SKILL_IDS]
+        onehot.append(1.0 if cid not in FC.SUMMONER_SKILL_IDS else 0.0)  # unknown
+        out += onehot
+
         return out
 
     # ---- 外塔 token ----
