@@ -11,19 +11,75 @@ Author: Tencent AI Arena Authors
 import torch
 import numpy as np
 import os
+import time
 from agent_diy.conf.conf import Config
 
 
 class Algorithm:
-    def __init__(self, model, device=None, logger=None, monitor=None):
+    def __init__(self, model, optimizer, scheduler, device=None, logger=None, monitor=None):
         self.device = device
         self.model = model
+        self.optimizer = optimizer
+        self.scheduler = scheduler
+        self.parameters = [p for pg in self.optimizer.param_groups for p in pg["params"]]
         self.train_step = 0
-
         self.logger = logger
         self.monitor = monitor
 
+        self.cut_points = [value[0] for value in Config.data_shapes]
+        self.data_split_shape = Config.DATA_SPLIT_SHAPE
+        self.seri_vec_split_shape = Config.SERI_VEC_SPLIT_SHAPE
+        self.lstm_unit_size = Config.LSTM_UNIT_SIZE
+        self.last_report_monitor_time = 0
+
     def learn(self, list_sample_data):
-        # Code to implement model train
-        # 实现模型训练的代码
-        pass
+        _input_datas = torch.stack([s.sample for s in list_sample_data]).to(self.device)
+        results = {}
+
+        data_list = list(_input_datas.split(self.cut_points, dim=1))
+        for i, data in enumerate(data_list):
+            data_list[i] = data.reshape(-1).float()
+
+        seri_vec = data_list[0].reshape(-1, self.data_split_shape[0])
+        feature, legal_action = seri_vec.split(
+            [int(np.prod(self.seri_vec_split_shape[0])), int(np.prod(self.seri_vec_split_shape[1]))], dim=1)
+        init_lstm_cell = data_list[-2]
+        init_lstm_hidden = data_list[-1]
+
+        feature_vec = feature.reshape(-1, self.seri_vec_split_shape[0][0])
+        lstm_hidden_state = init_lstm_hidden.reshape(-1, self.lstm_unit_size)
+        lstm_cell_state = init_lstm_cell.reshape(-1, self.lstm_unit_size)
+
+        format_inputs = [feature_vec, lstm_hidden_state, lstm_cell_state]
+
+        self.model.set_train_mode()
+        self.optimizer.zero_grad()
+
+        rst_list = self.model(format_inputs)
+        total_loss, info_list = self.model.compute_loss(data_list, rst_list)
+        results["total_loss"] = total_loss.item()
+
+        total_loss.backward()
+        if Config.USE_GRAD_CLIP:
+            torch.nn.utils.clip_grad_norm_(self.parameters, Config.GRAD_CLIP_RANGE)
+        self.optimizer.step()
+        self.train_step += 1
+        self.scheduler.step(self.train_step)
+
+        _info_list = []
+        for info in info_list:
+            if isinstance(info, list):
+                _info_list.append([i.item() for i in info])
+            else:
+                _info_list.append(info.item())
+
+        now = time.time()
+        if now - self.last_report_monitor_time >= 60:
+            _, (value_loss, policy_loss, entropy_loss) = _info_list
+            results["value_loss"] = round(value_loss, 2)
+            results["policy_loss"] = round(policy_loss, 2)
+            results["entropy_loss"] = round(entropy_loss, 2)
+            if self.monitor:
+                self.monitor.put_data({os.getpid(): results})
+            self.last_report_monitor_time = now
+        return results

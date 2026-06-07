@@ -4,8 +4,8 @@ probs_handler = "tools.action_space_1v1.DumpProbs"
 
 [hok1v1.policies.train_one]
 policy_builder = "kaiwudrl.server.aisrv.async_policy.AsyncBuilder"
-algo = "ppo"
+algo = "diy"
 
 [hok1v1.policies.train_two]
 policy_builder = "kaiwudrl.server.aisrv.async_policy.AsyncBuilder"
-algo = "ppo"
+algo = "diy"

@@ -13,7 +13,7 @@ from kaiwudrl.common.utils.train_test_utils import run_train_test
 # Simply modify the value of the algorithm_name variable.
 # 运行train_test前必须修改这里的算法名字, 必须是ppo、diy里的一个, 修改algorithm_name的值即可
 algorithm_name_list = ["ppo", "diy"]
-algorithm_name = "ppo"
+algorithm_name = "diy"
 
 
 if __name__ == "__main__":
@@ -21,9 +21,19 @@ if __name__ == "__main__":
         algorithm_name=algorithm_name,
         algorithm_name_list=algorithm_name_list,
         env_vars={
-            "replay_buffer_capacity": "10",
+            "replay_buffer_capacity": "512",
             "preload_ratio": "1.0",
-            "train_batch_size": "2",
-            "dump_model_freq": "1",
+            "reverb_remover": "reverb.selectors.Fifo",
+            "reverb_sampler": "reverb.selectors.Uniform",
+            "reverb_rate_limiter": "MinSize",
+            "reverb_samples_per_insert": "8",
+            "reverb_error_buffer": "8",
+            "train_batch_size": "128",
+            "dump_model_freq": "1000",
+            "model_file_sync_per_minutes": "1",
+            "modelpool_max_save_model_count": "1",
+            "preload_model": "False",
+            "preload_model_dir": "{agent_name}/ckpt",
+            "preload_model_id": "1000",
         },
     )

@@ -1,6 +1,6 @@
 ---
 name: kaiwu-webide-proxy
-description: Use for this Tencent Kaiwu/Tencent Arena HoK 1v1 course project when operating the remote WebIDE, syncing local code, running remote commands, checking IDE status, or running train_test.py. This project must use the WebIDE port-proxy workflow because the WebIDE container has no general outbound network access.
+description: Use for this Tencent Kaiwu/Tencent Arena HoK 1v1 course project when operating the remote WebIDE, syncing local code, running remote commands, checking IDE status, running train_test.py, or fetching training task logs from Kaiwu training management. This project must use the WebIDE port-proxy workflow for remote shell work and Course/GetTrainLog for course training logs.
 ---
 
 # Kaiwu WebIDE Proxy Workflow
@@ -77,6 +77,110 @@ If `train-test` returns an empty response but processes/logs show activity, use:
 python3 script/kaiwu_remote.py proxy-command --cmd 'ps -ef | grep train_test.py | grep -v grep || true'
 python3 script/kaiwu_remote.py proxy-command --cmd 'cd /data/projects/hok1v1 && grep -R "ERROR\\|Traceback\\|Exception\\|Execution error" -n log/learner log/aisrv 2>/dev/null | tail -80 || true'
 ```
+
+## Training Management Logs
+
+For platform training-management logs in this course project, use `Course/GetTrainLog`, not `Competition/GetTrainLog`.
+
+The verified course context is:
+
+```text
+domain.type=course
+domain.id=2383
+experiment_id=15823
+```
+
+Use the local Kaiwu session token from `~/.kaiwu/session.json`; do not use the WebIDE proxy for platform log APIs.
+
+### CLI
+
+Fetch all raw logs for a task by name and save JSONL:
+
+```bash
+node ../kaiwu-others/kaiwu-cli/bin/kaiwu.js log \
+  --domain-type course \
+  --domain-id 2383 \
+  --experiment-id 15823 \
+  --name train-diy-v0_0 \
+  --all \
+  --output logs/train-diy-v0_0.jsonl
+```
+
+Filter to errors:
+
+```bash
+node ../kaiwu-others/kaiwu-cli/bin/kaiwu.js log \
+  --domain-type course \
+  --domain-id 2383 \
+  --experiment-id 15823 \
+  --name train-diy-v0_0 \
+  --level ERROR \
+  --all \
+  --output logs/train-diy-v0_0-errors.jsonl
+```
+
+List available log levels/modules:
+
+```bash
+node ../kaiwu-others/kaiwu-cli/bin/kaiwu.js log --domain-type course --domain-id 2383 --experiment-id 15823 --name train-diy-v0_0 --query var_level
+node ../kaiwu-others/kaiwu-cli/bin/kaiwu.js log --domain-type course --domain-id 2383 --experiment-id 15823 --name train-diy-v0_0 --query var_module
+```
+
+Get 15-second log counts:
+
+```bash
+node ../kaiwu-others/kaiwu-cli/bin/kaiwu.js log \
+  --domain-type course \
+  --domain-id 2383 \
+  --experiment-id 15823 \
+  --name train-diy-v0_0 \
+  --query stat_log \
+  --interval 15 \
+  --all
+```
+
+### Raw API Contract
+
+Valid `Course/GetTrainLog` queries:
+
+```text
+var_level
+var_module
+query_log
+stat_log
+```
+
+Use this raw-log payload shape:
+
+```json
+{
+  "domain": {"type": "course", "id": 2383},
+  "experiment_id": 15823,
+  "train_task_id": 204664,
+  "start_time": {"timestamp": "2026-06-07T07:37:11.764Z"},
+  "end_time": {"timestamp": "2026-06-07T07:39:53.877Z"},
+  "query": "query_log",
+  "page": {"size": 20, "current": 1},
+  "var": {"message": "*", "level": "*", "module": "*"}
+}
+```
+
+Use this aggregate payload shape:
+
+```json
+{
+  "domain": {"type": "course", "id": 2383},
+  "experiment_id": 15823,
+  "train_task_id": 204664,
+  "start_time": {"timestamp": "2026-06-07T07:37:11.764Z"},
+  "end_time": {"timestamp": "2026-06-07T07:39:53.877Z"},
+  "query": "stat_log",
+  "page": {"size": 100, "current": 1},
+  "var": {"message": "*", "level": "*", "module": "*", "interval": "15"}
+}
+```
+
+Do not use `stat_level_log`; it is the old competition-side guess and does not fetch course raw logs. Do not guess enum names; unsupported values return protobuf enum errors. If task times are missing, use the task `created_at` as `start_time` and `end_time || now` as `end_time`.
 
 ## Important Constraints
 
