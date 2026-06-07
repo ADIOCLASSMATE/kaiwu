@@ -6,21 +6,37 @@
 """
 Author: Tencent AI Arena Authors
 
-增强版模型：
-  实体分投影 → 加类型嵌入 → Transformer 跨实体融合(带 key_padding_mask)
-  → masked-mean 池化 + 主英雄 token 拼接 + 全局特征 → LSTM(256) → 多头输出。
+增强版模型（v2）：
 
-与 learner / 环境的契约：
+  实体编码：按「类型」共享投影(hero/structure/minion 各 1 个) → 拼接 R 个 register
+  token → pre-LN + AdaLN-Zero Transformer(条件 = type×camp，逐 token 调制
+  scale/shift/gate) → 取 register token 作为学习式池化向量，拼全局特征 → LSTM(256)。
+
+  动作输出：
+    - label[0..4]：button / 方向，沿用 MLP(LSTM 输出) 头。
+    - label[5]   ：target 选择，改为 pointer —— query=LSTM 输出，key=各 target 槽
+      对应实体的 transformer 输出（槽 None/Monster 用可学习 null key），logits =
+      query·key / sqrt(d)。这样逐实体隐状态被 target 头直接消费，而非池化丢弃。
+
+设计要点（相对 v1）：
+  - 取消「加性 type embedding」：类型身份由 (a) 按类型共享的投影、(b) AdaLN 的
+    per-(type×camp) 条件注入；比纯加性更具表达力（可缩放方差 + 门控残差）。
+  - 取消 masked-mean 池化与「单独拼 main_hero」：改为 register token 学习式池化，
+    重要实体（含敌英雄）由注意力自然加权，main_hero 的 ego 身份由其 AdaLN 条件
+    (hero×ego) 与 target 头的 Self 槽保留。
+  - present 解耦：token 第 0 维 exists 仅用于构造 key_padding_mask（屏蔽空槽）；
+    可见性/存活/消失时长是普通特征，雾中实体不再被强制清零。
+
+与 learner / 环境的契约（不变）：
   - forward(inference=True) 返回 [logits(85), value(1), lstm_cell, lstm_hidden]，
     logits 切分顺序 = LABEL_SIZE_LIST = [12,16,16,16,16,9]。
-  - compute_loss 实现 dual-clip / value-clip / adv-norm PPO，
-    legal_action 从 feature 后段(85)切出，与 ppo 基线签名一致。
+  - compute_loss 与基线签名一致（dual-clip / value-clip / adv-norm PPO）。
   - 训练路径 B×T，推理路径 T=1（set_eval_mode 把 lstm_time_steps 置 1）。
 """
 
 import torch
 import torch.nn as nn
-from torch.nn import ModuleDict
+from torch.nn import ModuleDict, ModuleList
 import numpy as np
 from typing import List
 
@@ -50,6 +66,44 @@ class MLP(nn.Module):
         return self.fc_layers(data)
 
 
+class AdaLNBlock(nn.Module):
+    """pre-LN + AdaLN-Zero Transformer block。
+
+    条件按「逐 token 的 (type×camp) / register」索引，提供 per-condition 的
+    scale(γ)、shift(β)、gate(α)。AdaLN-Zero：全部 0 初始化 → block 初始为恒等，
+    训练稳定（DiT 同款）。
+    """
+
+    def __init__(self, d_model: int, nhead: int, ffn_dim: int, n_cond: int):
+        super().__init__()
+        self.d_model = d_model
+        self.norm1 = nn.LayerNorm(d_model, elementwise_affine=False)
+        self.attn = nn.MultiheadAttention(d_model, nhead, batch_first=True)
+        self.norm2 = nn.LayerNorm(d_model, elementwise_affine=False)
+        self.mlp = nn.Sequential(
+            make_fc_layer(d_model, ffn_dim),
+            nn.GELU(),
+            make_fc_layer(ffn_dim, d_model),
+        )
+        # [γ1, β1, gate1, γ2, β2, gate2]，逐 condition 一行，0 初始化（AdaLN-Zero）
+        self.mod_table = nn.Parameter(torch.zeros(n_cond, 6 * d_model))
+
+    def forward(self, x, cond_idx, key_padding_mask):
+        # x: (B, S, D); cond_idx: (S,) long; key_padding_mask: (B, S) bool, True=屏蔽
+        mod = self.mod_table[cond_idx]                       # (S, 6D)
+        g1, b1, k1, g2, b2, k2 = mod.chunk(6, dim=-1)        # each (S, D)
+        g1, b1, k1 = g1.unsqueeze(0), b1.unsqueeze(0), k1.unsqueeze(0)
+        g2, b2, k2 = g2.unsqueeze(0), b2.unsqueeze(0), k2.unsqueeze(0)
+
+        h = self.norm1(x) * (1.0 + g1) + b1
+        attn_out, _ = self.attn(h, h, h, key_padding_mask=key_padding_mask, need_weights=False)
+        x = x + k1 * attn_out
+
+        h = self.norm2(x) * (1.0 + g2) + b2
+        x = x + k2 * self.mlp(h)
+        return x
+
+
 class Model(nn.Module):
     def __init__(self):
         super(Model, self).__init__()
@@ -73,112 +127,163 @@ class Model(nn.Module):
         self.cut_points = [value[0] for value in Config.data_shapes]
         self.legal_action_size = Config.LEGAL_ACTION_SIZE_LIST
 
-        self.feature_dim = int(DimConfig.DIM_OF_FEATURE[0])   # FEATURE_DIM (247)
+        self.feature_dim = int(DimConfig.DIM_OF_FEATURE[0])
 
-        # ---- 实体 token 切分元信息（来自 FeatureConfig.TOKEN_SEGMENTS）----
+        # ---- token 元信息 ----
         self.token_segments = FeatureConfig.TOKEN_SEGMENTS
         self.num_tokens = FeatureConfig.NUM_TOKENS
         self.token_feature_dim = FeatureConfig.TOKEN_FEATURE_DIM
         self.global_dim = FeatureConfig.GLOBAL_DIM
 
-        self.embed_dim = 128
+        self.embed_dim = Config.EMBED_DIM
+        self.n_register = Config.N_REGISTER
 
-        # ---- 各 type_key 一个投影 + 一个可学习类型嵌入 ----
-        type_keys = []
-        for type_key, dim, count in self.token_segments:
-            if type_key not in type_keys:
-                type_keys.append(type_key)
-        self.type_keys = type_keys
-        self.entity_proj = ModuleDict({
-            tk: make_fc_layer(self._dim_of_type(tk), self.embed_dim) for tk in type_keys
-        })
-        self.type_embedding = nn.Parameter(torch.zeros(len(type_keys), self.embed_dim))
-        nn.init.normal_(self.type_embedding, std=0.02)
-        self.type_key_to_idx = {tk: i for i, tk in enumerate(type_keys)}
-
-        # 展开每个 token 的 (type_key, start, dim)，main_hero 固定 index 0
+        # 展开每个 token 的 (type_key, start, dim) 与 token 顺序的 type_key 列表
         self.token_layout = []
+        self.token_keys = []
         off = 0
         for type_key, dim, count in self.token_segments:
             for _ in range(count):
                 self.token_layout.append((type_key, off, dim))
+                self.token_keys.append(type_key)
                 off += dim
         assert off == self.token_feature_dim
 
-        # ---- Transformer 跨实体融合 ----
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model=self.embed_dim, nhead=4, dim_feedforward=256,
-            dropout=0.0, batch_first=True, activation="relu")
-        self.transformer = nn.TransformerEncoder(
-            encoder_layer,
-            num_layers=2,
-            enable_nested_tensor=False,
-        )
+        # ---- 按「类型」共享的投影（hero/structure/minion 各一个）----
+        self.proj_key_of = dict(FeatureConfig.TYPE_OF)
+        proj_in = {}
+        for type_key, dim, count in self.token_segments:
+            proj_in[self.proj_key_of[type_key]] = dim   # 同类型 dim 一致
+        self.entity_proj = ModuleDict({
+            pk: make_fc_layer(in_dim, self.embed_dim) for pk, in_dim in proj_in.items()
+        })
 
-        # ---- 池化 + 主英雄 + 全局 → LSTM 输入 ----
-        self.global_proj = MLP([self.global_dim, 64, 64], "global_proj", non_linearity_last=True)
-        fused_dim = self.embed_dim * 2 + 64
+        # ---- AdaLN 条件索引：register 用独立条件 ----
+        cond_keys = list(FeatureConfig.COND_KEYS)
+        self.cond_key_to_idx = {k: i for i, k in enumerate(cond_keys)}
+        self.register_cond_idx = len(cond_keys)          # register 专属条件
+        n_cond = len(cond_keys) + 1
+        cond_idx = [self.register_cond_idx] * self.n_register + \
+                   [self.cond_key_to_idx[k] for k in self.token_keys]
+        self.register_buffer("cond_idx", torch.tensor(cond_idx, dtype=torch.long))
+
+        # ---- register tokens（学习式池化）----
+        self.register_tokens = nn.Parameter(torch.zeros(self.n_register, self.embed_dim))
+        nn.init.normal_(self.register_tokens, std=0.02)
+
+        # ---- pre-LN + AdaLN-Zero Transformer ----
+        ffn_dim = self.embed_dim * Config.FFN_MULT
+        self.blocks = ModuleList([
+            AdaLNBlock(self.embed_dim, Config.N_HEADS, ffn_dim, n_cond)
+            for _ in range(Config.N_LAYERS)
+        ])
+
+        # ---- 池化向量 + 全局 → LSTM 输入 ----
+        self.global_proj = MLP(
+            [self.global_dim, Config.GLOBAL_PROJ_DIM, Config.GLOBAL_PROJ_DIM],
+            "global_proj", non_linearity_last=True)
+        fused_dim = self.embed_dim * self.n_register + Config.GLOBAL_PROJ_DIM
         self.fuse_mlp = MLP([fused_dim, self.lstm_unit_size], "fuse_mlp", non_linearity_last=True)
 
         self.lstm = nn.LSTM(
             input_size=self.lstm_unit_size, hidden_size=self.lstm_unit_size,
             num_layers=1, bias=True, batch_first=True)
 
-        # ---- 多头输出 ----
+        # ---- 动作头：label[0..4] 用 MLP，label[5] 用 pointer ----
+        self.n_categorical_heads = len(self.label_size_list) - 1   # 前 5 个头
         self.label_mlp = ModuleDict({
             "hero_label{0}_mlp".format(i): MLP(
-                [self.lstm_unit_size, 256, self.label_size_list[i]], "hero_label{0}_mlp".format(i))
-            for i in range(len(self.label_size_list))
+                [self.lstm_unit_size] + Config.LABEL_HEAD_HIDDEN_DIMS + [self.label_size_list[i]],
+                "hero_label{0}_mlp".format(i))
+            for i in range(self.n_categorical_heads)
         })
-        self.value_mlp = MLP([self.lstm_unit_size, 256, 1], "hero_value_mlp")
+        self.value_mlp = MLP(
+            [self.lstm_unit_size] + Config.VALUE_HEAD_HIDDEN_DIMS + [1],
+            "hero_value_mlp")
 
-    def _dim_of_type(self, type_key):
-        for tk, dim, count in self.token_segments:
-            if tk == type_key:
-                return dim
-        raise KeyError(type_key)
+        # ---- pointer target 头 ----
+        self._build_target_pointer()
 
-    # ---- 实体编码：feature -> fused state (B*T, lstm_unit_size) ----
+    def _build_target_pointer(self):
+        """根据 TARGET_SLOT_DESC 建立 target 槽 → token 的映射 + null key。"""
+        desc = FeatureConfig.TARGET_SLOT_DESC
+        key_positions = {}
+        for i, k in enumerate(self.token_keys):
+            key_positions.setdefault(k, []).append(i)
+        counters = {k: 0 for k in key_positions}
+
+        tgt_idx, tgt_real_slots, tgt_null_slots = [], [], []
+        for slot, (name, key) in enumerate(desc):
+            if key is None:
+                tgt_null_slots.append(slot)
+            else:
+                toks = key_positions[key]
+                c = counters[key]
+                counters[key] += 1
+                assert c < len(toks), "target 槽 '%s' 需要的 token 超过该 type_key 的数量" % name
+                tgt_idx.append(toks[c])
+                tgt_real_slots.append(slot)
+
+        self.num_target_slots = len(desc)
+        self.register_buffer("tgt_idx", torch.tensor(tgt_idx, dtype=torch.long))
+        self.register_buffer("tgt_real_slots", torch.tensor(tgt_real_slots, dtype=torch.long))
+        self.register_buffer("tgt_null_slots", torch.tensor(tgt_null_slots, dtype=torch.long))
+
+        self.target_query_proj = make_fc_layer(self.lstm_unit_size, self.embed_dim)
+        n_null = len(tgt_null_slots)
+        self.null_keys = nn.Parameter(torch.zeros(n_null, self.embed_dim))
+        nn.init.normal_(self.null_keys, std=0.02)
+
+    # ---- 实体编码：feature -> (fused state, per-entity transformer 输出) ----
     def _encode(self, feature_vec):
-        token_part = feature_vec[:, : self.token_feature_dim]
+        bt = feature_vec.shape[0]
+        token_part = feature_vec[:, :self.token_feature_dim]
         global_part = feature_vec[:, self.token_feature_dim:]
 
         embeds = []
-        present_list = []
+        exists_list = []
         for type_key, start, dim in self.token_layout:
-            seg = token_part[:, start:start + dim]              # (bt, dim)
-            present = (seg[:, 0:1] > 0.5).float()               # 第 0 位 = present
-            proj = self.entity_proj[type_key](seg)              # (bt, embed_dim)
-            tidx = self.type_key_to_idx[type_key]
-            proj = proj + self.type_embedding[tidx].unsqueeze(0)
+            seg = token_part[:, start:start + dim]                 # (bt, dim)
+            exists = (seg[:, 0:1] > 0.5).float()                   # 第 0 位 = exists
+            proj = self.entity_proj[self.proj_key_of[type_key]](seg)
             embeds.append(proj.unsqueeze(1))
-            present_list.append(present)
+            exists_list.append(exists)
+        entity_tokens = torch.cat(embeds, dim=1)                   # (bt, N, D)
+        exists_mat = torch.cat(exists_list, dim=1)                 # (bt, N)
 
-        tokens = torch.cat(embeds, dim=1)                       # (bt, num_tokens, embed_dim)
-        present_mat = torch.cat(present_list, dim=1).clone()    # (bt, num_tokens)
-        # 强制 main_hero(index 0)=present，防止整行被 mask
-        present_mat[:, 0] = 1.0
-        key_padding_mask = (present_mat < 0.5)                  # True=屏蔽
+        reg = self.register_tokens.unsqueeze(0).expand(bt, -1, -1)  # (bt, R, D)
+        x = torch.cat([reg, entity_tokens], dim=1)                 # (bt, R+N, D)
 
-        fused = self.transformer(tokens, src_key_padding_mask=key_padding_mask)
+        # key_padding_mask：register 永不屏蔽；entity 由 exists 决定（屏蔽空槽）
+        reg_mask = torch.zeros(bt, self.n_register, dtype=torch.bool, device=x.device)
+        ent_mask = exists_mat < 0.5
+        key_padding_mask = torch.cat([reg_mask, ent_mask], dim=1)  # (bt, R+N)
 
-        # masked-mean 池化（只对 present token 求均值）
-        mask = present_mat.unsqueeze(-1)
-        summed = (fused * mask).sum(dim=1)
-        denom = mask.sum(dim=1).clamp(min=1.0)
-        pooled = summed / denom
+        for blk in self.blocks:
+            x = blk(x, self.cond_idx, key_padding_mask)
 
-        main_hero_embed = fused[:, 0, :]
-        global_embed = self.global_proj(global_part)
+        reg_out = x[:, :self.n_register, :].reshape(bt, -1)        # (bt, R*D)
+        entity_out = x[:, self.n_register:, :]                     # (bt, N, D)
 
-        concat = torch.cat([pooled, main_hero_embed, global_embed], dim=1)
-        state = self.fuse_mlp(concat)
-        return state
+        global_embed = self.global_proj(global_part)               # (bt, G)
+        state = self.fuse_mlp(torch.cat([reg_out, global_embed], dim=1))
+        return state, entity_out
+
+    def _target_pointer(self, query_in, entity_out):
+        # query_in: (bt, lstm_unit); entity_out: (bt, N, D) -> logits: (bt, num_target_slots)
+        bt = entity_out.shape[0]
+        d = self.embed_dim
+        q = self.target_query_proj(query_in)                       # (bt, D)
+        keys = q.new_zeros(bt, self.num_target_slots, d)
+        keys[:, self.tgt_real_slots, :] = entity_out[:, self.tgt_idx, :]
+        keys[:, self.tgt_null_slots, :] = self.null_keys.unsqueeze(0).expand(bt, -1, -1)
+        logits = (keys * q.unsqueeze(1)).sum(dim=-1) / (d ** 0.5)  # (bt, num_target_slots)
+        return logits
 
     def forward(self, data_list, inference=False):
         feature_vec, lstm_hidden_init, lstm_cell_init = data_list
 
-        state = self._encode(feature_vec)                       # (B*T, H)
+        state, entity_out = self._encode(feature_vec)              # (bt,H), (bt,N,D)
 
         t = self.lstm_time_steps
         bt = state.shape[0]
@@ -194,8 +299,9 @@ class Model(nn.Module):
         flat = lstm_out.reshape(bt, self.lstm_unit_size)
 
         result_list = []
-        for i in range(len(self.label_size_list)):
+        for i in range(self.n_categorical_heads):                 # label[0..4]
             result_list.append(self.label_mlp["hero_label{0}_mlp".format(i)](flat))
+        result_list.append(self._target_pointer(flat, entity_out))  # label[5] = pointer
         value_result = self.value_mlp(flat)
         result_list.append(value_result)
 
@@ -228,7 +334,6 @@ class Model(nn.Module):
 
         reward = usq_reward.squeeze(dim=1)
         advantage = usq_advantage.squeeze(dim=1)
-        # 保留未标准化的 advantage，用于重建 old_value（reward_sum = advantage + value）。
         raw_advantage = advantage
         label_list = [ele.squeeze(dim=1) for ele in usq_label_list]
         weight_list = [w.squeeze(dim=1) for w in usq_weight_list]
@@ -254,7 +359,6 @@ class Model(nn.Module):
         legal_action_flag_list = torch.split(feature_legal_action, self.label_size_list, dim=1)
 
         fc2_value_result_squeezed = value_result.squeeze(dim=1)
-        # value-clip：old_value = reward_sum - advantage（用未标准化的 advantage 重建），
         old_value = reward - raw_advantage
         v_clipped = old_value + torch.clamp(
             fc2_value_result_squeezed - old_value, -self.value_clip_param, self.value_clip_param)
@@ -290,7 +394,6 @@ class Model(nn.Module):
                 surr1 = ratio * advantage
                 surr2 = ratio.clamp(1.0 - self.clip_param, 1.0 + self.clip_param) * advantage
                 clipped = torch.minimum(surr1, surr2)
-                # dual-clip：advantage<0 时损失下界 = dual_clip_param * advantage
                 dual = torch.maximum(clipped, self.dual_clip_param * advantage)
                 surrogate = torch.where(advantage < 0, dual, clipped)
 

@@ -285,7 +285,9 @@ class FeatureBuilder:
         ss = hero.get("skill_state", {}) or {}
         for s in ss.get("slot_states", []) or []:
             slots[s.get("slot_type")] = s
+
         out = []
+        # 每槽基础 3 维：usable, cd_remaining, level_ratio（按 slot_type 显式索引）
         for st in FC.SKILL_SLOT_TYPES:
             s = slots.get(st)
             if s is None:
@@ -297,7 +299,23 @@ class FeatureBuilder:
             cd_remaining = _clip01(cd / cdmax) if cdmax > 0 else 0.0
             level_ratio = _clip01(s.get("level", 0) / 6.0)
             out += [usable, cd_remaining, level_ratio]
+
+        # 召唤师技能身份 one-hot（英雄 config_id 推不出，必须显式编码）
+        out += self._summoner_onehot(slots.get(FC.SUMMONER_SLOT_TYPE))
         return out
+
+    def _summoner_onehot(self, slot):
+        dim = FC.SUMMONER_ONEHOT_DIM
+        vec = [0.0] * dim
+        if slot is None:
+            return vec
+        cid = slot.get("configId")
+        try:
+            idx = FC.SUMMONER_SKILL_IDS.index(cid)
+        except ValueError:
+            idx = dim - 1   # unknown 兜底桶
+        vec[idx] = 1.0
+        return vec
 
     # ---- 建筑 token ----
     def _struct_token(self, npc, sub_type, is_main_camp):

@@ -58,12 +58,24 @@ class FeatureConfig:
     HERO_CONFIG_IDS = [112, 133, 199]      # 鲁班 / 狄仁杰 / 公孙离
     HERO_ID_ONEHOT_DIM = len(HERO_CONFIG_IDS) + 1   # +unknown
 
-    # ---- 技能槽（实测 slot_type ∈ [0,1,2,3,5,6,7]，4 仅部分英雄） ----
-    # 显式索引 0,1,2,3,4,5,6（覆盖普攻/三技能/技能4/回城/召唤师技能）。
-    # 每槽 3 维：usable, cd_remaining_ratio(cooldown/cooldown_max), level_ratio。
-    SKILL_SLOT_TYPES = [0, 1, 2, 3, 4, 5, 6]
+    # ---- 技能槽（实测 slot_type ∈ [0,1,2,3,5,6,7]，4 仅部分英雄保留兜底） ----
+    # 全量索引 0,1,2,3,4,5,6,7：
+    #   0 普攻 / 1-3 本命三技能 / 4 技能4(仅特定英雄,当前英雄池恒空,留位防扩展)
+    #   5 回城(90003) / 6 召唤师技能(80xxx,同英雄不同局会变) / 7 装备技能(90005)
+    # 每槽基础 3 维：usable, cd_remaining_ratio(cooldown/cooldown_max), level_ratio。
+    # 仅召唤师槽(slot 6)额外编码技能身份 one-hot：英雄 config_id 推不出召唤师技能,
+    # 是真正的信息缺口；本命/回城/装备技能由英雄唯一确定,configId 冗余不编码。
+    SKILL_SLOT_TYPES = [0, 1, 2, 3, 4, 5, 6, 7]
     SKILL_FEAT_PER_SLOT = 3
-    SKILL_DIM = len(SKILL_SLOT_TYPES) * SKILL_FEAT_PER_SLOT   # 21
+
+    # 召唤师技能 one-hot：10 种已知 + 1 unknown 兜底。顺序须与 builder 一致。
+    SUMMONER_SKILL_IDS = [80102, 80109, 80104, 80108, 80110,
+                          80105, 80103, 80107, 80121, 80115]
+    SUMMONER_SLOT_TYPE = 6
+    SUMMONER_ONEHOT_DIM = len(SUMMONER_SKILL_IDS) + 1   # 11
+
+    SKILL_DIM = (len(SKILL_SLOT_TYPES) * SKILL_FEAT_PER_SLOT   # 8*3 = 24
+                 + SUMMONER_ONEHOT_DIM)                       # +11 = 35
 
     # ---- 各实体 token 维度 ----
     # HERO_DIM 明细见 hero_process 注释。
@@ -77,7 +89,7 @@ class FeatureConfig:
         + 2                    # mov_spd, atk_spd 软饱和
         + 3                    # crit_rate, crit_effe, phy_vamp（万分比 /1e4）
         + 2                    # hp_recover, ep_recover 软饱和
-        + SKILL_DIM            # 21
+        + SKILL_DIM            # 35 (8槽*3 + 召唤师 one-hot 11)
         + 2                    # in_enemy_tower_range, enemy_in_my_atk_range
     )
 
