@@ -6,152 +6,190 @@
 """
 Author: Tencent AI Arena Authors
 
-agent_diy 增强版配置。
+agent_diy 增强版配置（v2）。
 
-设计要点（与 learner / 环境的契约）：
-  - 动作空间 LABEL_SIZE_LIST = [12, 16, 16, 16, 16, 9] 固定不变。
-  - 样本里存的 legal_action 为压缩后的 85 维 (= 12+16+16+16+16+9)，
-    DATA_SPLIT_SHAPE[0] = FEATURE_DIM + 85。
-  - LSTM_UNIT_SIZE = 256（已启用 LSTM，区别于 ppo 基线的 512 透传）。
-  - SERI_VEC_SPLIT_SHAPE / DATA_SPLIT_SHAPE / data_shapes / SAMPLE_DIM
-    全部从 FeatureConfig.FEATURE_DIM 派生，改特征只需改 FeatureConfig。
+本次相对上一版的结构性改动：
+  1. 结构实体只保留「外塔(21)」：1v1 墨家机关道里二塔(24)/水晶(23) 不是目标、
+     对决策也无用，删掉后 own/enemy 各只剩 1 个 tower token，并删掉 struct 的
+     type one-hot（只剩一种结构，one-hot 退化成常量）。
+  2. present 解耦：token 第 0 维改为 exists（=padding，槽位是否被占用，纯结构信息，
+     唯一驱动 mask）；visible / alive / time_since_seen 作为普通特征留在 token 内，
+     不可见实体（如雾中的敌英雄）不再整 token 清零，而是保留「最后已知位置」+
+     「消失多久」，由模型自己决定要不要采信。
+  3. camp 不再用 token 内 camp_is_main 原始位编码，也不再用 own_/enemy_ 拆两套投影；
+     改为「type 共享投影(3 个) + (type×camp) AdaLN 条件」在模型侧注入。
+     own/enemy 区分仍体现在 TOKEN_SEGMENTS 的 type_key（用于映射 AdaLN 条件、
+     pointer target key），但不再产生额外的 token 内特征位。
+  4. target 头改为 pointer（见 model）：9 个 target 槽与 token 一一对应（见
+     TARGET_SLOT_DESC），槽 0/8 为可学习 null key。
 
-特征向量布局（顺序即 model._encode 切分顺序）：
-  [ main_hero_token | enemy_hero_token
-    | own_struct(外塔,二塔,水晶) x3 | enemy_struct(外塔,二塔,水晶) x3
-    | own_minion x4 | enemy_minion x4
-    | global(GLOBAL_DIM) ]
-  其中 main_hero 固定为 token index 0（契约 A）。
-  每个 token 第 0 维为 present（>0.5 表示有效），供模型构造 key_padding_mask。
+特征向量布局（顺序即 model._encode 切分顺序 / FeatureProcess 输出顺序）：
+  [ main_hero | enemy_hero | own_tower | enemy_tower
+    | own_minion x4 | enemy_minion x4 | global(GLOBAL_DIM) ]
+  其中 main_hero 固定为 token index 0。
+  每个 token 第 0 维为 exists（>0.5 表示槽位被占用），供模型构造 key_padding_mask。
 """
 
 
 class GameConfig:
     # 各奖励子项权重，在 reward_manager 中使用（10 子项稠密奖励）。
-    # Weight of each reward item, used in reward_manager (10 dense sub-rewards).
     REWARD_WEIGHT_DICT = {
         "tower_hp_point": 5.0,      # 推塔（判定胜负的外塔 sub_type=21），零和
         "enemy_tower_hp": 4.0,      # 敌方外塔血量下降的正向激励，零和
         "hp_point": 2.0,            # 自身血量比例，零和
-        "ep_rate": 0.5,            # 法力/能量比例，零和
+        "ep_rate": 0.5,             # 法力/能量比例，零和
         "kill": 1.0,                # 击杀数差，零和
         "death": -1.0,              # 死亡数差（权重为负，越少越好），零和
-        "money": 0.6,              # 经济差，零和
-        "exp": 0.6,                # 经验差，零和
-        "forward": 0.05,           # 向敌方塔前进（仅满血时计算），非零和
-        "last_hit": 0.5,           # 对小兵的最后一击（击杀小兵收益），非零和
+        "money": 0.6,               # 经济差，零和
+        "exp": 0.6,                 # 经验差，零和
+        "forward": 0.05,            # 向敌方塔前进（仅满血时计算），非零和
+        "last_hit": 0.5,            # 对小兵的最后一击（击杀小兵收益），非零和
     }
-    # 时间衰减因子，在 reward_manager 中使用。0 表示关闭衰减。
     TIME_SCALE_ARG = 0
-    # 模型保存间隔（秒），在 workflow 中使用。
     MODEL_SAVE_INTERVAL = 1800
 
 
 class FeatureConfig:
     """特征工程的唯一真源（single source of truth）。
 
-    改这里的 *_DIM / TOKEN_SEGMENTS / GLOBAL_DIM 后，Config 中所有维度
-    会自动更新；但必须保证 FeatureProcess 实际输出长度 == FEATURE_DIM。
+    改 *_DIM / TOKEN_SEGMENTS / GLOBAL_DIM 后，Config 中所有维度会自动更新；
+    但必须保证 FeatureProcess 实际输出长度 == FEATURE_DIM。
     """
 
     # ---- 英雄池 config_id（用于 one-hot） ----
     HERO_CONFIG_IDS = [112, 133, 199]      # 鲁班 / 狄仁杰 / 公孙离
     HERO_ID_ONEHOT_DIM = len(HERO_CONFIG_IDS) + 1   # +unknown
 
-    # ---- 技能槽（实测 slot_type ∈ [0,1,2,3,5,6,7]，4 仅部分英雄保留兜底） ----
-    # 全量索引 0,1,2,3,4,5,6,7：
-    #   0 普攻 / 1-3 本命三技能 / 4 技能4(仅特定英雄,当前英雄池恒空,留位防扩展)
-    #   5 回城(90003) / 6 召唤师技能(80xxx,同英雄不同局会变) / 7 装备技能(90005)
-    # 每槽基础 3 维：usable, cd_remaining_ratio(cooldown/cooldown_max), level_ratio。
-    # 仅召唤师槽(slot 6)额外编码技能身份 one-hot：英雄 config_id 推不出召唤师技能,
-    # 是真正的信息缺口；本命/回城/装备技能由英雄唯一确定,configId 冗余不编码。
-    SKILL_SLOT_TYPES = [0, 1, 2, 3, 4, 5, 6, 7]
+    # ---- 技能槽 ----
+    SKILL_SLOT_TYPES = [0, 1, 2, 3, 4, 5, 6]
     SKILL_FEAT_PER_SLOT = 3
+    SKILL_DIM = len(SKILL_SLOT_TYPES) * SKILL_FEAT_PER_SLOT   # 21
 
-    # 召唤师技能 one-hot：10 种已知 + 1 unknown 兜底。顺序须与 builder 一致。
-    SUMMONER_SKILL_IDS = [80102, 80109, 80104, 80108, 80110,
-                          80105, 80103, 80107, 80121, 80115]
-    SUMMONER_SLOT_TYPE = 6
-    SUMMONER_ONEHOT_DIM = len(SUMMONER_SKILL_IDS) + 1   # 11
-
-    SKILL_DIM = (len(SKILL_SLOT_TYPES) * SKILL_FEAT_PER_SLOT   # 8*3 = 24
-                 + SUMMONER_ONEHOT_DIM)                       # +11 = 35
+    # ---- token 通用状态块（解耦后的 present）----
+    # 所有 token 第 0 维都是 exists（padding 位）。其余状态位按实体类型不同：
+    #   hero/tower: exists, visible, alive, time_since_seen, ...
+    #   minion:     exists, ...（小兵只在「当前可见且存活」时入槽，故省略冗余状态位）
+    HERO_STATUS_DIM = 4    # exists, visible, alive, time_since_seen
+    STRUCT_STATUS_DIM = 4  # exists, visible, alive, time_since_seen
+    MINION_STATUS_DIM = 1  # exists
 
     # ---- 各实体 token 维度 ----
-    # HERO_DIM 明细见 hero_process 注释。
     HERO_DIM = (
-        4          # present, hp_ratio, ep_ratio, camp_is_main
+        HERO_STATUS_DIM        # exists, visible, alive, time_since_seen
+        + 2                    # hp_ratio, ep_ratio
         + HERO_ID_ONEHOT_DIM   # 4: config one-hot (+unknown)
-        + 2 + 2 + 1            # rel_pos(交战尺度), abs_pos(地图尺度), dist_to_main(大尺度)
+        + 2 + 2 + 1            # rel_pos(交战尺度), abs_pos(地图尺度), dist_to_main
         + 2                    # forward 朝向 (归一化 x,z)
         + 3                    # level_ratio, money_soft, exp_soft
         + 4                    # phy_atk/phy_def/mgc_atk/mgc_def 软饱和
         + 2                    # mov_spd, atk_spd 软饱和
         + 3                    # crit_rate, crit_effe, phy_vamp（万分比 /1e4）
         + 2                    # hp_recover, ep_recover 软饱和
-        + SKILL_DIM            # 35 (8槽*3 + 召唤师 one-hot 11)
+        + SKILL_DIM            # 21
         + 2                    # in_enemy_tower_range, enemy_in_my_atk_range
-    )
+    )                          # = 54
 
-    # STRUCT_DIM: present, hp_ratio, camp_is_main, type_onehot(塔/二塔/水晶=3),
-    #             rel_pos(2), abs_pos(2), dist_to_main(1), attack_range_soft(1), main_in_range(1)
-    STRUCT_TYPE_ONEHOT_DIM = 3
-    STRUCT_DIM = 1 + 1 + 1 + STRUCT_TYPE_ONEHOT_DIM + 2 + 2 + 1 + 1 + 1   # 13
+    # STRUCT_DIM: 状态块(4) + hp_ratio(1) + rel_pos(2) + abs_pos(2) + dist(1)
+    #             + attack_range_soft(1) + main_in_range(1)
+    STRUCT_DIM = STRUCT_STATUS_DIM + 1 + 2 + 2 + 1 + 1 + 1   # = 12
 
-    # MINION_DIM: present, hp_ratio, camp_is_main, rel_pos(2), dist_to_main(1), in_my_atk_range(1)
-    MINION_DIM = 1 + 1 + 1 + 2 + 1 + 1   # 7
+    # MINION_DIM: exists(1) + hp_ratio(1) + rel_pos(2) + dist(1) + in_my_atk_range(1)
+    MINION_DIM = MINION_STATUS_DIM + 1 + 2 + 1 + 1   # = 6
 
     # ---- token 数量 ----
-    N_STRUCT_PER_CAMP = 3   # 固定顺序 [外塔21, 二塔24, 水晶23]
-    N_MINION_PER_CAMP = 4   # 最近 4 个小兵（与 legal_action 的 Soldier=4 一致）
+    N_STRUCT_PER_CAMP = 1   # 仅外塔(21)
+    N_MINION_PER_CAMP = 4   # 最近 4 个小兵（与 target 槽 Soldier1-4 一致）
 
     # ---- TOKEN_SEGMENTS：(type_key, dim, count)，顺序即特征拼接顺序 ----
-    # model._encode 按此自动切分各段、按 type_key 建投影。main_hero 必须是 index 0。
+    # type_key 同时编码了 (实体类型, 阵营)，供模型映射「共享投影(按类型) + AdaLN 条件
+    # (按 type×camp)」。main_hero 必须是 index 0。
     TOKEN_SEGMENTS = [
-        ("main_hero",       HERO_DIM,   1),
-        ("enemy_hero",      HERO_DIM,   1),
-        ("own_structures",  STRUCT_DIM, N_STRUCT_PER_CAMP),
-        ("enemy_structures", STRUCT_DIM, N_STRUCT_PER_CAMP),
-        ("own_minions",     MINION_DIM, N_MINION_PER_CAMP),
-        ("enemy_minions",   MINION_DIM, N_MINION_PER_CAMP),
+        ("main_hero",     HERO_DIM,   1),
+        ("enemy_hero",    HERO_DIM,   1),
+        ("own_tower",     STRUCT_DIM, N_STRUCT_PER_CAMP),
+        ("enemy_tower",   STRUCT_DIM, N_STRUCT_PER_CAMP),
+        ("own_minions",   MINION_DIM, N_MINION_PER_CAMP),
+        ("enemy_minions", MINION_DIM, N_MINION_PER_CAMP),
     ]
 
+    # ---- 模型侧用到的语义映射（放这里做 single source of truth）----
+    # 每个 type_key 的「类型」(决定共享投影) 与「阵营」(连同类型决定 AdaLN 条件)。
+    TYPE_OF = {
+        "main_hero": "hero", "enemy_hero": "hero",
+        "own_tower": "structure", "enemy_tower": "structure",
+        "own_minions": "minion", "enemy_minions": "minion",
+    }
+    CAMP_OF = {
+        "main_hero": "ego", "enemy_hero": "enemy",
+        "own_tower": "own", "enemy_tower": "enemy",
+        "own_minions": "own", "enemy_minions": "enemy",
+    }
+    # AdaLN 条件 = type_key（每个 type_key 唯一对应一个 (type,camp) 组合）。
+    COND_KEYS = ["main_hero", "enemy_hero", "own_tower",
+                 "enemy_tower", "own_minions", "enemy_minions"]
+
+    # ---- target 头 (label[5]) 的 9 个槽：含义 + key 来源 ----
+    # key 来源为 token type_key 的，pointer 直接取该实体的 transformer 输出；
+    # 为 None 的（None/Monster）使用可学习 null key。Soldier1-4 = 最近 4 个敌方小兵，
+    # 与 enemy_minions 的入槽顺序（按到主英雄距离升序）一一对应。
+    TARGET_SLOT_DESC = [
+        ("None",       None),            # 0
+        ("EnemyHero",  "enemy_hero"),    # 1
+        ("Self",       "main_hero"),     # 2
+        ("Soldier1",   "enemy_minions"), # 3  -> 最近第1个敌方小兵
+        ("Soldier2",   "enemy_minions"), # 4
+        ("Soldier3",   "enemy_minions"), # 5
+        ("Soldier4",   "enemy_minions"), # 6
+        ("Tower",      "enemy_tower"),   # 7
+        ("Monster",    None),            # 8  -> 1v1 无野怪，恒被 legal mask
+    ]
+    NUM_TARGET_SLOTS = len(TARGET_SLOT_DESC)   # 9
+
     # ---- 全局特征（非 token，拼在 token 之后） ----
-    # frame_no, own_struct_alive, enemy_struct_alive, main_in_enemy_tower_range,
+    # frame_no, own_tower_alive, enemy_tower_alive, main_in_enemy_tower_range,
     # enemy_hero_in_my_atk_range, hp_adv, level_adv, money_adv, enemy_hero_visible
     GLOBAL_DIM = 9
 
     # ---- 总 token 数 / token 特征长度 / 总特征维度 ----
-    NUM_TOKENS = sum(count for _, _, count in TOKEN_SEGMENTS)
-    TOKEN_FEATURE_DIM = sum(dim * count for _, dim, count in TOKEN_SEGMENTS)
-    FEATURE_DIM = TOKEN_FEATURE_DIM + GLOBAL_DIM
+    NUM_TOKENS = sum(count for _, _, count in TOKEN_SEGMENTS)            # 12
+    TOKEN_FEATURE_DIM = sum(dim * count for _, dim, count in TOKEN_SEGMENTS)  # 180
+    FEATURE_DIM = TOKEN_FEATURE_DIM + GLOBAL_DIM                          # 189
 
-    # ---- 坐标重定标常量（详见 feature 构造器注释） ----
-    MAP_SCALE = 46000.0        # 绝对位置尺度（地图对角 ~130000，单边 ~±46000）
-    ENGAGE_SCALE = 13000.0     # 相对位移（交战尺度，近处高分辨率，clip 到 [-1,1]）
-    DIST_SCALE = 130000.0      # 整体距离尺度（地图对角）
-    SENTINEL = 99999           # |x| 或 |z| >= 该值视为不可见/死亡哨兵
+    # ---- 坐标重定标常量 ----
+    MAP_SCALE = 46000.0
+    ENGAGE_SCALE = 13000.0
+    DIST_SCALE = 130000.0
+    SENTINEL = 99999
+    # time_since_seen 归一化尺度（帧）：消失多久 → clip(dframe / TSS_SCALE, 0, 1)。
+    TSS_SCALE = 300.0
 
 
 # 模型与算法相关配置
 class Config:
     NETWORK_NAME = "network"
     LSTM_TIME_STEPS = 16
-    LSTM_UNIT_SIZE = 256        # 已启用的 LSTM(256)
+    LSTM_UNIT_SIZE = 256
 
-    # 特征 / 合法动作维度（全部派生自 FeatureConfig）
+    # ---- entity-transformer 编码器超参（model 读取）----
+    EMBED_DIM = 128          # token 嵌入维度 d_model
+    N_HEADS = 4              # 注意力头数
+    N_LAYERS = 2            # encoder 层数
+    FFN_MULT = 2            # FFN 隐层 = FFN_MULT * EMBED_DIM
+    N_REGISTER = 2          # register token 数量（学习式池化）
+    GLOBAL_PROJ_DIM = 64     # 全局特征投影维度
+
+    # 输出头配置：label/value 头的中间隐层维度列表（不含输入和最后一层）
+    # 空列表 = 输入直连输出；[256] = 一层 256 隐层（旧行为）
+    LABEL_HEAD_HIDDEN_DIMS = []     # [] = 直连，[256] = 恢复旧行为
+    VALUE_HEAD_HIDDEN_DIMS = []
+
+    # 特征 / 合法动作维度（派生自 FeatureConfig）
     FEATURE_DIM = FeatureConfig.FEATURE_DIM
     LEGAL_ACTION_DIM = 85       # 压缩后：12+16+16+16+16+9
 
     LABEL_SIZE_LIST = [12, 16, 16, 16, 16, 9]
     LABEL_SUM = sum(LABEL_SIZE_LIST)   # 85
 
-    # 样本里一帧的字段顺序（与 _format_data 写入顺序一致）：
-    #   feature+legal(FEATURE_DIM+85), reward_sum(1), advantage(1),
-    #   action(6 个标量), old_prob(12+16+16+16+16+9=85), sub_action/weight(6 个标量),
-    #   is_train(1), lstm_cell(256), lstm_hidden(256)
-    # 注意：action 段是 6 个「动作索引标量」(各 1 维)，old_prob 段才是 6 个标签的概率分布
-    # (12,16,16,16,16,9)。这与 learner 中 compute_loss 的字段切分严格对应。
     DATA_SPLIT_SHAPE = [
         FEATURE_DIM + LEGAL_ACTION_DIM,   # 0: feature + 压缩 legal_action
         1,                                # 1: reward_sum
@@ -164,7 +202,6 @@ class Config:
         LSTM_UNIT_SIZE,                   # 23: lstm_hidden
     ]
 
-    # 模型按 SERI_VEC_SPLIT_SHAPE 切出 feature 与 legal_action。
     SERI_VEC_SPLIT_SHAPE = [(FEATURE_DIM,), (LEGAL_ACTION_DIM,)]
 
     INIT_LEARNING_RATE_START = 1e-3
@@ -175,17 +212,13 @@ class Config:
 
     IS_REINFORCE_TASK_LIST = [True, True, True, True, True, True]
 
-    # PPO clip / dual-clip / value-clip / adv-norm 相关
     CLIP_PARAM = 0.2
-    DUAL_CLIP_PARAM = 3.0       # dual-clip 的下界系数
-    VALUE_CLIP_PARAM = 0.2      # value 裁剪范围
-    USE_ADV_NORM = True         # advantage 标准化
+    DUAL_CLIP_PARAM = 3.0
+    VALUE_CLIP_PARAM = 0.2
+    USE_ADV_NORM = True
     MIN_POLICY = 0.00001
     TARGET_EMBED_DIM = 32
 
-    # data_shapes：每个字段在一个 LSTM 序列（LSTM_TIME_STEPS 帧）里的展开长度。
-    # 前 N-2 段 = 单帧维度 * LSTM_TIME_STEPS；最后 2 段为单份 LSTM 状态。
-    # 用普通 for 循环而非推导式，避免类作用域名字在推导式内不可见的问题。
     data_shapes = []
     for _i in range(len(DATA_SPLIT_SHAPE) - 2):
         data_shapes.append([DATA_SPLIT_SHAPE[_i] * LSTM_TIME_STEPS])
@@ -202,7 +235,6 @@ class Config:
     USE_GRAD_CLIP = True
     GRAD_CLIP_RANGE = 0.5
 
-    # learner 上 reverb 样本输入维度。
     SAMPLE_DIM = sum(DATA_SPLIT_SHAPE[:-2]) * LSTM_TIME_STEPS + sum(DATA_SPLIT_SHAPE[-2:])
 
 
