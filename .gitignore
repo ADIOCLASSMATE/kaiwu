@@ -1,0 +1,14 @@
+.DS_Store
+__pycache__/
+*.pyc
+.pipeline
+.claude/*
+!.claude/skills/
+!.claude/skills/**
+password.txt
+.kaiwu-remote.env
+.kaiwu-sync-*.tgz
+script/*.log
+script/*.pid
+script/bootstrap-proxy-server.remote.sh
+real_game*
