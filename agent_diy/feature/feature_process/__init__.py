@@ -10,16 +10,17 @@ FeatureProcess: 把环境 observation 转成 FeatureConfig.FEATURE_DIM 维特征
 
 输出布局（顺序即 conf.FeatureConfig.TOKEN_SEGMENTS + 全局段）：
   main_hero(HERO_DIM) | enemy_hero(HERO_DIM)
-  | own_structures x3 (STRUCT_DIM) | enemy_structures x3 (STRUCT_DIM)
+  | own_tower(STRUCT_DIM)          | enemy_tower(STRUCT_DIM)
   | own_minions x4 (MINION_DIM)    | enemy_minions x4 (MINION_DIM)
+  | monster(MONSTER_DIM)
   | global(GLOBAL_DIM)
 
 关键约定：
-  - 每个 token 第 0 维是 present（1=有效，0=不存在/不可见/死亡），供模型造 mask。
+  - 每个 token 第 0 维是 exists（1=槽位有效，0=padding），供模型造 mask。
   - 视角统一到「主视角」：camp==2 时把坐标 x、z 取反，镜像到 camp1 视角，
     使 camp1 / camp2 的输出对称。
-  - 哨兵处理：|x|>=SENTINEL 或 |z|>=SENTINEL → present=0、整 token 置零、
-    不参与任何距离/位置计算。NPC 还要判 camp_visible[main_camp-1]。
+  - 哨兵处理：|x|>=SENTINEL 或 |z|>=SENTINEL 的当前可见 NPC 不入槽；
+    英雄/塔保留 last-known 位置特征。NPC 还要判 camp_visible[main_camp-1]。
   - 数值经软饱和 value/(value+K) 或固定尺度归一，避免依赖精确上限。
   - 相对位移用 ENGAGE_SCALE 后 clip 到 [-1,1] 再线性映射到 [0,1]；
     绝对位置用 MAP_SCALE；整体距离用 DIST_SCALE。

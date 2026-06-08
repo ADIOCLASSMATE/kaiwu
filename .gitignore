@@ -8,7 +8,7 @@ __pycache__/
 password.txt
 .kaiwu-remote.env
 .kaiwu-sync-*.tgz
-# *.tar.gz
+*.tar.gz
 script/*.log
 script/*.pid
 script/bootstrap-proxy-server.remote.sh

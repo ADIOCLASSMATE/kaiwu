@@ -97,11 +97,13 @@ class GameRewardManager:
         if button not in GameConfig.ATTACK_BUTTONS:
             return 0.0
         # target 槽：0 None / 1 EnemyHero / 2 Self / 3-6 Soldier / 7 Tower / 8 Monster
-        # 只对「敌英雄 / 小兵」做越程判定（Self/None/Tower/Monster 不罚）。
+        # 对可解析攻击目标做越程判定；Tower 保持不罚，避免推塔策略被该 shaping 干扰。
         if target == 1:
             tpos = self._enemy_hero_pos(decided_frame_state)
         elif 3 <= target <= 6:
             tpos = self._nth_enemy_minion_pos(decided_frame_state, target - 3)
+        elif target == 8:
+            tpos = self._nearest_monster_pos(decided_frame_state)
         else:
             return 0.0
         if tpos is None:
@@ -116,7 +118,7 @@ class GameRewardManager:
         dist = math.hypot(tpos[0] - mpos[0], tpos[1] - mpos[1])
         return -w if dist > atk_range else 0.0
 
-    # ---- distance shaping 辅助：定位主英雄 / 敌英雄 / 第 k 近敌方小兵 ----
+    # ---- distance shaping 辅助：定位主英雄 / 敌英雄 / 第 k 近敌方小兵 / 最近野怪 ----
     def _main_hero(self, fs):
         for h in fs.get("hero_states", []):
             if h.get("runtime_id") == self.main_hero_player_id:
@@ -149,6 +151,30 @@ class GameRewardManager:
                 cand.append((math.hypot(p[0] - mpos[0], p[1] - mpos[1]), p))
         cand.sort(key=lambda t: t[0])
         return cand[k][1] if k < len(cand) else None
+
+    def _nearest_monster_pos(self, fs):
+        mh = self._main_hero(fs)
+        if mh is None:
+            return None
+        mpos = (mh["location"]["x"], mh["location"]["z"])
+        cand = []
+        for npc in fs.get("npc_states", []):
+            if not self._is_resource_monster(npc):
+                continue
+            loc = npc.get("location", {})
+            if self._is_sentinel(loc):
+                continue
+            p = (loc["x"], loc["z"])
+            cand.append((math.hypot(p[0] - mpos[0], p[1] - mpos[1]), p))
+        cand.sort(key=lambda t: t[0])
+        return cand[0][1] if cand else None
+
+    @staticmethod
+    def _is_resource_monster(npc):
+        return (npc.get("actor_type") == MINION_ACTOR_TYPE
+                and npc.get("sub_type") != MINION_SUBTYPE
+                and npc.get("kill_income", 0) > 0
+                and npc.get("hp", 0) > 0)
 
     @staticmethod
     def _is_sentinel(loc):

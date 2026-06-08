@@ -21,11 +21,11 @@ agent_diy 增强版配置（v2）。
      own/enemy 区分仍体现在 TOKEN_SEGMENTS 的 type_key（用于映射 AdaLN 条件、
      pointer target key），但不再产生额外的 token 内特征位。
   4. target 头改为 pointer（见 model）：9 个 target 槽与 token 一一对应（见
-     TARGET_SLOT_DESC），槽 0/8 为可学习 null key。
+     TARGET_SLOT_DESC），槽 0 为可学习 null key。
 
 特征向量布局（顺序即 model._encode 切分顺序 / FeatureProcess 输出顺序）：
   [ main_hero | enemy_hero | own_tower | enemy_tower
-    | own_minion x4 | enemy_minion x4 | global(GLOBAL_DIM) ]
+    | own_minion x4 | enemy_minion x4 | monster | global(GLOBAL_DIM) ]
   其中 main_hero 固定为 token index 0。
   每个 token 第 0 维为 exists（>0.5 表示槽位被占用），供模型构造 key_padding_mask。
 """
@@ -129,12 +129,22 @@ class FeatureConfig:
     #             + attack_range_soft(1) + main_in_range(1)
     STRUCT_DIM = STRUCT_STATUS_DIM + 1 + 2 + 2 + 1 + 1 + 1   # = 12
 
-    # MINION_DIM: exists(1) + hp_ratio(1) + rel_pos(2) + dist(1) + in_my_atk_range(1)
-    MINION_DIM = MINION_STATUS_DIM + 1 + 2 + 1 + 1   # = 6
+    # NPC 资源价值/击杀成本的软饱和尺度。收益对小兵/野怪共享，便于模型比较资源目标。
+    NPC_HP_SOFT_SCALE = 4000.0
+    KILL_INCOME_SOFT_SCALE = 100.0
+
+    # MINION_DIM: exists(1) + hp_ratio(1) + hp_soft(1) + rel_pos(2) + dist(1)
+    #             + in_my_atk_range(1) + kill_income_soft(1)
+    MINION_DIM = MINION_STATUS_DIM + 1 + 1 + 2 + 1 + 1 + 1   # = 8
+
+    # MONSTER_DIM: exists(1) + hp_ratio(1) + hp_soft(1) + rel_pos(2) + dist(1)
+    #              + in_my_atk_range(1) + kill_income_soft(1)
+    MONSTER_DIM = 1 + 1 + 1 + 2 + 1 + 1 + 1   # = 8
 
     # ---- token 数量 ----
     N_STRUCT_PER_CAMP = 1   # 仅外塔(21)
     N_MINION_PER_CAMP = 4   # 最近 4 个小兵（与 target 槽 Soldier1-4 一致）
+    N_MONSTER = 1           # target 槽 Monster = 最近 1 个有收益野怪
 
     # ---- TOKEN_SEGMENTS：(type_key, dim, count)，顺序即特征拼接顺序 ----
     # type_key 同时编码了 (实体类型, 阵营)，供模型映射「共享投影(按类型) + AdaLN 条件
@@ -146,6 +156,7 @@ class FeatureConfig:
         ("enemy_tower",   STRUCT_DIM, N_STRUCT_PER_CAMP),
         ("own_minions",   MINION_DIM, N_MINION_PER_CAMP),
         ("enemy_minions", MINION_DIM, N_MINION_PER_CAMP),
+        ("monsters",      MONSTER_DIM, N_MONSTER),
     ]
 
     # ---- 模型侧用到的语义映射（放这里做 single source of truth）----
@@ -154,19 +165,22 @@ class FeatureConfig:
         "main_hero": "hero", "enemy_hero": "hero",
         "own_tower": "structure", "enemy_tower": "structure",
         "own_minions": "minion", "enemy_minions": "minion",
+        "monsters": "monster",
     }
     CAMP_OF = {
         "main_hero": "ego", "enemy_hero": "enemy",
         "own_tower": "own", "enemy_tower": "enemy",
         "own_minions": "own", "enemy_minions": "enemy",
+        "monsters": "neutral",
     }
     # AdaLN 条件 = type_key（每个 type_key 唯一对应一个 (type,camp) 组合）。
     COND_KEYS = ["main_hero", "enemy_hero", "own_tower",
-                 "enemy_tower", "own_minions", "enemy_minions"]
+                 "enemy_tower", "own_minions", "enemy_minions",
+                 "monsters"]
 
     # ---- target 头 (label[5]) 的 9 个槽：含义 + key 来源 ----
     # key 来源为 token type_key 的，pointer 直接取该实体的 transformer 输出；
-    # 为 None 的（None/Monster）使用可学习 null key。Soldier1-4 = 最近 4 个敌方小兵，
+    # 为 None 的（None）使用可学习 null key。Soldier1-4 = 最近 4 个敌方小兵，
     # 与 enemy_minions 的入槽顺序（按到主英雄距离升序）一一对应。
     TARGET_SLOT_DESC = [
         ("None",       None),            # 0
@@ -177,7 +191,7 @@ class FeatureConfig:
         ("Soldier3",   "enemy_minions"), # 5
         ("Soldier4",   "enemy_minions"), # 6
         ("Tower",      "enemy_tower"),   # 7
-        ("Monster",    None),            # 8  -> 1v1 无野怪，恒被 legal mask
+        ("Monster",    "monsters"),      # 8  -> 最近 1 个有收益野怪
     ]
     NUM_TARGET_SLOTS = len(TARGET_SLOT_DESC)   # 9
 
@@ -187,9 +201,9 @@ class FeatureConfig:
     GLOBAL_DIM = 9
 
     # ---- 总 token 数 / token 特征长度 / 总特征维度 ----
-    NUM_TOKENS = sum(count for _, _, count in TOKEN_SEGMENTS)            # 12
-    TOKEN_FEATURE_DIM = sum(dim * count for _, dim, count in TOKEN_SEGMENTS)  # 180
-    FEATURE_DIM = TOKEN_FEATURE_DIM + GLOBAL_DIM                          # 189
+    NUM_TOKENS = sum(count for _, _, count in TOKEN_SEGMENTS)            # 13
+    TOKEN_FEATURE_DIM = sum(dim * count for _, dim, count in TOKEN_SEGMENTS)  # 232
+    FEATURE_DIM = TOKEN_FEATURE_DIM + GLOBAL_DIM                          # 241
 
     # ---- 坐标重定标常量 ----
     MAP_SCALE = 46000.0

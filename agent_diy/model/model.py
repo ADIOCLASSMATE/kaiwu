@@ -8,14 +8,14 @@ Author: Tencent AI Arena Authors
 
 增强版模型（v2）：
 
-  实体编码：按「类型」共享投影(hero/structure/minion 各 1 个) → 拼接 R 个 register
+  实体编码：按「类型」共享投影(hero/structure/minion/monster 各 1 个) → 拼接 R 个 register
   token → pre-LN + AdaLN-Zero Transformer(条件 = type×camp，逐 token 调制
   scale/shift/gate) → 取 register token 作为学习式池化向量，拼全局特征 → LSTM(256)。
 
   动作输出：
     - label[0..4]：button / 方向，沿用 MLP(LSTM 输出) 头。
     - label[5]   ：target 选择，改为 pointer —— query=LSTM 输出，key=各 target 槽
-      对应实体的 transformer 输出（槽 None/Monster 用可学习 null key），logits =
+      对应实体的 transformer 输出（槽 None 用可学习 null key），logits =
       query·key / sqrt(d)。这样逐实体隐状态被 target 头直接消费，而非池化丢弃。
 
 设计要点（相对 v1）：

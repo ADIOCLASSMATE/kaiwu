@@ -14,6 +14,8 @@ FeatureBuilder（v2）：构造 FEATURE_DIM 维特征向量。
     visible / alive / time_since_seen 作为普通特征，不可见实体不再整 token 清零：
     保留「最后已知位置」(仅来自本方真实观测，不偷看 ground-truth) 与「消失多久」。
   - 删除 camp_is_main 原始位（敌我由模型侧 type_key / AdaLN 条件区分）。
+  - 增加 1 个资源野怪 token：仅收入 kill_income>0 的非小兵 NPC，排除泉水等
+    无收益单位；Monster target 槽可 pointer 到该 token。
 
 跨帧记忆：FeatureBuilder 每局由 FeatureProcess.reset 重建，故可安全地把
 last-seen 记忆作为实例状态保存（不会跨局污染）。仅在「当前可观测」时更新记忆，
@@ -66,7 +68,8 @@ class FeatureBuilder:
         self.mirror = (camp == 2)             # camp2 镜像到 camp1 视角
         self.vis_index = camp - 1             # camp_visible 主视角索引
         # 跨帧记忆：key -> {"frame": int, "x": float, "z": float, "alive": bool}
-        # key ∈ {"main_hero","enemy_hero","own_tower","enemy_tower"}
+        # key ∈ {"main_hero","enemy_hero","own_tower","enemy_tower"}。
+        # 野怪可能随机刷新，当前不可见/不存在时不沿用 last-seen，避免 stale 资源误导。
         self._mem = {}
 
     # ---- 坐标工具 ----
@@ -146,7 +149,7 @@ class FeatureBuilder:
 
         # 建筑分类：只认外塔(21)，own / enemy 各一个
         own_tower, enemy_tower = None, None
-        own_minions, enemy_minions = [], []
+        own_minions, enemy_minions, monsters = [], [], []
         for npc in npcs:
             at = npc.get("actor_type")
             st = npc.get("sub_type")
@@ -161,7 +164,9 @@ class FeatureBuilder:
                     own_minions.append(npc)
                 else:
                     enemy_minions.append(npc)
-            # 其它（二塔/水晶/出兵营/野怪等）忽略
+            elif self._is_resource_monster(npc):
+                monsters.append(npc)
+            # 其它（二塔/水晶/出兵营/无收益中立单位等）忽略
 
         # 预计算「主英雄是否在敌方外塔攻击范围内」(危险)
         self._danger_cache = 0.0
@@ -183,6 +188,8 @@ class FeatureBuilder:
         # ---- minions（按到主英雄距离取最近 N）----
         feat += self._minion_tokens(own_minions)
         feat += self._minion_tokens(enemy_minions)
+        # ---- monster（按到主英雄距离取最近 N；当前 N=1）----
+        feat += self._monster_tokens(monsters)
         # ---- global ----
         feat += self._global_feature(frame_no, main_hero, enemy_hero, own_tower, enemy_tower)
 
@@ -203,6 +210,13 @@ class FeatureBuilder:
         if d is None or self._main_atk_range <= 0:
             return 0.0
         return 1.0 if d <= self._main_atk_range else 0.0
+
+    @staticmethod
+    def _is_resource_monster(npc):
+        return (npc.get("actor_type") == MINION_ACTOR_TYPE
+                and npc.get("sub_type") != MINION_SUBTYPE
+                and npc.get("kill_income", 0) > 0
+                and npc.get("hp", 0) > 0)
 
     # ---- 英雄 token ----
     def _hero_token(self, hero, mem_key, is_main, enemy_hero, frame_no):
@@ -410,6 +424,7 @@ class FeatureBuilder:
         f.append(1.0)  # exists
         max_hp = m.get("max_hp", 0) or 1
         f.append(_clip01(m.get("hp", 0) / max_hp))
+        f.append(_soft(m.get("hp", 0), FC.NPC_HP_SOFT_SCALE))
         if self._main_pos is not None:
             f.append(_rel_to01(pos[0] - self._main_pos[0], FC.ENGAGE_SCALE))
             f.append(_rel_to01(pos[1] - self._main_pos[1], FC.ENGAGE_SCALE))
@@ -417,6 +432,47 @@ class FeatureBuilder:
             f += [0.5, 0.5]
         f.append(_clip01(d / FC.DIST_SCALE) if d is not None else 0.0)
         f.append(self._in_main_atk_range(pos))
+        f.append(_soft(m.get("kill_income", 0), FC.KILL_INCOME_SOFT_SCALE))
+        return f
+
+    # ---- 野怪 token ----
+    def _monster_tokens(self, monsters):
+        valid = []
+        for m in monsters:
+            loc = m.get("location", {})
+            if self._is_sentinel(loc):
+                continue
+            if not self._visible_to_main(m):
+                continue
+            pos = self._xz(loc)
+            d = self._dist_to_main(pos)
+            valid.append((d if d is not None else 1e18, m, pos, d))
+        valid.sort(key=lambda t: t[0])
+
+        out = []
+        n = FC.N_MONSTER
+        for i in range(n):
+            if i < len(valid):
+                _, m, pos, d = valid[i]
+                out += self._monster_token(m, pos, d)
+            else:
+                out += [0.0] * FC.MONSTER_DIM
+        return out
+
+    def _monster_token(self, m, pos, d):
+        f = []
+        f.append(1.0)  # exists
+        max_hp = m.get("max_hp", 0) or 1
+        f.append(_clip01(m.get("hp", 0) / max_hp))
+        f.append(_soft(m.get("hp", 0), FC.NPC_HP_SOFT_SCALE))
+        if self._main_pos is not None:
+            f.append(_rel_to01(pos[0] - self._main_pos[0], FC.ENGAGE_SCALE))
+            f.append(_rel_to01(pos[1] - self._main_pos[1], FC.ENGAGE_SCALE))
+        else:
+            f += [0.5, 0.5]
+        f.append(_clip01(d / FC.DIST_SCALE) if d is not None else 0.0)
+        f.append(self._in_main_atk_range(pos))
+        f.append(_soft(m.get("kill_income", 0), FC.KILL_INCOME_SOFT_SCALE))
         return f
 
     # ---- 全局特征 ----
