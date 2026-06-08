@@ -37,13 +37,14 @@ from agent_diy.feature.targeting import (
 )
 
 
-def _soft(value, k):
-    """软饱和归一化 value/(value+k)，value>=0。结果 ∈ [0,1)。"""
+def _log_compress(value):
+    """log(1+x) 压缩重尾特征，结果 ∈ [0,+∞)，后续由模型侧 LayerNorm 统一尺度。"""
     if value is None:
         return 0.0
-    if value <= 0:
+    v = float(value)
+    if v <= 0.0:
         return 0.0
-    return float(value) / (float(value) + float(k))
+    return math.log(1.0 + v)
 
 
 def _clip01(v):
@@ -296,25 +297,25 @@ class FeatureBuilder:
         # 以下全部为动态战斗/成长属性：雾中不可知 → 0
         if observable:
             f.append(_clip01(hero.get("level", 1) / 15.0))
-            f.append(_soft(hero.get("money", 0), 5000.0))
-            f.append(_soft(hero.get("exp", 0), 2000.0))
-            f.append(_soft(hero.get("phy_atk", 0), 400.0))
-            f.append(_soft(hero.get("phy_def", 0), 300.0))
-            f.append(_soft(hero.get("mgc_atk", 0), 400.0))
-            f.append(_soft(hero.get("mgc_def", 0), 300.0))
-            f.append(_soft(hero.get("mov_spd", 0), 4000.0))
-            f.append(_soft(hero.get("atk_spd", 0), 1500.0))
+            f.append(_log_compress(hero.get("money", 0)))
+            f.append(_log_compress(hero.get("exp", 0)))
+            f.append(_log_compress(hero.get("phy_atk", 0)))
+            f.append(_log_compress(hero.get("phy_def", 0)))
+            f.append(_log_compress(hero.get("mgc_atk", 0)))
+            f.append(_log_compress(hero.get("mgc_def", 0)))
+            f.append(_log_compress(hero.get("mov_spd", 0)))
+            f.append(_log_compress(hero.get("atk_spd", 0)))
             f.append(_clip01(hero.get("crit_rate", 0) / 10000.0))
             f.append(_clip01(hero.get("crit_effe", 0) / 10000.0))
             f.append(_clip01(hero.get("phy_vamp", 0) / 10000.0))
             f.append(_clip01(hero.get("mgc_vamp", 0) / FC.MGC_VAMP_SCALE))
-            f.append(_soft(hero.get("hp_recover", 0), 100.0))
-            f.append(_soft(hero.get("ep_recover", 0), 50.0))
-            f.append(_soft(hero.get("phy_armor_hurt", 0), FC.ARMOR_HURT_SCALE))
-            f.append(_soft(hero.get("mgc_armor_hurt", 0), FC.ARMOR_HURT_SCALE))
+            f.append(_log_compress(hero.get("hp_recover", 0)))
+            f.append(_log_compress(hero.get("ep_recover", 0)))
+            f.append(_log_compress(hero.get("phy_armor_hurt", 0)))
+            f.append(_log_compress(hero.get("mgc_armor_hurt", 0)))
             f.append(_clip01(hero.get("cd_reduce", 0) / FC.CD_REDUCE_SCALE))
             f.append(_clip01(hero.get("ctrl_reduce", 0) / FC.CTRL_REDUCE_SCALE))
-            f.append(_soft(hero.get("sight_area", 0), FC.SIGHT_AREA_SCALE))
+            f.append(_log_compress(hero.get("sight_area", 0)))
             f.append(1.0 if hero.get("is_in_grass", False) else 0.0)
             f += self._skill_feature(hero)
         else:
@@ -356,7 +357,7 @@ class FeatureBuilder:
         )
 
     def _equip_feature(self, hero):
-        """6 格装备：每槽 [exists, buyPrice_soft, has_active, has_passive]。
+        """6 格装备：每槽 [exists, buyPrice_log, has_active, has_passive]。
 
         不编码 configId onehot（装备 ID 空间过大）。装备价格作为档次代理；
         主动/被动技能标志影响 button 11（装备技能）可用性判断。
@@ -368,7 +369,7 @@ class FeatureBuilder:
                 eq = equips[i]
                 has = 1.0 if eq.get("configId", 0) != 0 else 0.0
                 out.append(has)
-                out.append(_soft(eq.get("buyPrice", 0), FC.EQUIP_PRICE_SCALE))
+                out.append(_log_compress(eq.get("buyPrice", 0)))
                 out.append(1.0 if eq.get("active_skill") else 0.0)
                 out.append(1.0 if eq.get("passive_skill") else 0.0)
             else:
@@ -454,7 +455,7 @@ class FeatureBuilder:
         f += self._pos_block(use_pos)
         # attack_range_soft(1)（塔的攻击范围是配置常量，可视为已知）
         atk_range = float(npc.get("attack_range", 0) or 0)
-        f.append(_soft(atk_range, 12000.0))
+        f.append(_log_compress(atk_range))
         # main_in_range(1)（动态：需要当前位置）
         in_range = 0.0
         d = self._dist_to_main(use_pos) if use_pos is not None else None
@@ -501,7 +502,7 @@ class FeatureBuilder:
         f.append(1.0)  # exists
         max_hp = m.get("max_hp", 0) or 1
         f.append(_clip01(m.get("hp", 0) / max_hp))
-        f.append(_soft(m.get("hp", 0), FC.NPC_HP_SOFT_SCALE))
+        f.append(_log_compress(m.get("hp", 0)))
         if self._main_pos is not None:
             f.append(_rel_to01(pos[0] - self._main_pos[0], FC.ENGAGE_SCALE))
             f.append(_rel_to01(pos[1] - self._main_pos[1], FC.ENGAGE_SCALE))
@@ -509,7 +510,7 @@ class FeatureBuilder:
             f += [0.5, 0.5]
         f.append(_clip01(d / FC.DIST_SCALE) if d is not None else 0.0)
         f.append(self._in_main_atk_range(pos))
-        f.append(_soft(m.get("kill_income", 0), FC.KILL_INCOME_SOFT_SCALE))
+        f.append(_log_compress(m.get("kill_income", 0)))
         f += self._attack_target_feature(m)
         f += self._arli_mark_feature(m)
         return f
@@ -551,7 +552,7 @@ class FeatureBuilder:
         f.append(1.0)  # exists
         max_hp = m.get("max_hp", 0) or 1
         f.append(_clip01(m.get("hp", 0) / max_hp))
-        f.append(_soft(m.get("hp", 0), FC.NPC_HP_SOFT_SCALE))
+        f.append(_log_compress(m.get("hp", 0)))
         if self._main_pos is not None:
             f.append(_rel_to01(pos[0] - self._main_pos[0], FC.ENGAGE_SCALE))
             f.append(_rel_to01(pos[1] - self._main_pos[1], FC.ENGAGE_SCALE))
@@ -559,7 +560,7 @@ class FeatureBuilder:
             f += [0.5, 0.5]
         f.append(_clip01(d / FC.DIST_SCALE) if d is not None else 0.0)
         f.append(self._in_main_atk_range(pos))
-        f.append(_soft(m.get("kill_income", 0), FC.KILL_INCOME_SOFT_SCALE))
+        f.append(_log_compress(m.get("kill_income", 0)))
         return f
 
     # ---- hero bullet tokens ----

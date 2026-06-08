@@ -158,6 +158,12 @@ class Model(nn.Module):
             pk: make_fc_layer(in_dim, self.embed_dim) for pk, in_dim in proj_in.items()
         })
 
+        # ---- 输入 LayerNorm：log 压缩后的特征经 LN 统一尺度再投影 ----
+        self.input_norm = ModuleDict({
+            pk: nn.LayerNorm(in_dim, elementwise_affine=True)
+            for pk, in_dim in proj_in.items()
+        })
+
         # ---- AdaLN 条件索引：register 用独立条件 ----
         cond_keys = list(FeatureConfig.COND_KEYS)
         self.cond_key_to_idx = {k: i for i, k in enumerate(cond_keys)}
@@ -244,7 +250,8 @@ class Model(nn.Module):
         exists_list = []
         for type_key, start, dim in self.token_layout:
             seg = token_part[:, start:start + dim]                 # (bt, dim)
-            exists = (seg[:, 0:1] > 0.5).float()                   # 第 0 位 = exists
+            exists = (seg[:, 0:1] > 0.5).float()                   # 第 0 位 = exists（LN 前）
+            seg = self.input_norm[self.proj_key_of[type_key]](seg)
             proj = self.entity_proj[self.proj_key_of[type_key]](seg)
             embeds.append(proj.unsqueeze(1))
             exists_list.append(exists)

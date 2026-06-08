@@ -130,13 +130,10 @@ class FeatureConfig:
     EQUIP_DIM = EQUIP_SLOTS * EQUIP_FEAT_PER_SLOT  # = 24
 
     # ---- 各实体 token 维度 ----
-    # 英雄战斗属性归一化尺度
+    # 英雄战斗属性归一化尺度（仅保留天然比率用到的 scale）
     MGC_VAMP_SCALE = 10000.0       # 万分比，同 crit_rate/phy_vamp
-    ARMOR_HURT_SCALE = 200.0       # 穿透值软饱和
     CD_REDUCE_SCALE = 10000.0      # 万分比
     CTRL_REDUCE_SCALE = 10000.0    # 万分比
-    SIGHT_AREA_SCALE = 15000.0     # 视野范围软饱和
-    EQUIP_PRICE_SCALE = 3000.0     # 装备价格软饱和
 
     HERO_DIM = (
         HERO_STATUS_DIM        # 4: exists, visible, alive, time_since_seen
@@ -164,9 +161,6 @@ class FeatureConfig:
     #             + attack_range_soft(1) + main_in_range(1) + attack_target(5)
     STRUCT_DIM = STRUCT_STATUS_DIM + 1 + 2 + 2 + 1 + 1 + 1 + ATTACK_TARGET_DIM   # = 17
 
-    # NPC 资源价值/击杀成本的软饱和尺度。收益对小兵/野怪共享，便于模型比较资源目标。
-    NPC_HP_SOFT_SCALE = 4000.0
-    KILL_INCOME_SOFT_SCALE = 100.0
 
     # MINION_DIM: exists(1) + hp_ratio(1) + hp_soft(1) + rel_pos(2) + dist(1)
     #             + in_my_atk_range(1) + kill_income_soft(1) + attack_target(5)
