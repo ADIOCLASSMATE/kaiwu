@@ -43,11 +43,13 @@ class GameConfig:
         "money": 0.6,               # 经济差，零和
         "exp": 0.6,                 # 经验差，零和
         "forward": 0.05,            # 向敌方塔站位（HP 越高权重越大），非零和
-        "last_hit": 0.5,            # 补刀收益差分，非零和
+        "last_hit": 0.4,            # 补刀收益差分（降权防刷线不推塔），非零和
         # 挂机惩罚：长时间零产出 *且* 不在回撤/泉水区时才罚。权重为负，非零和。
         "idle_penalty": -0.15,
     }
-    TIME_SCALE_ARG = 0
+    # 时间衰减：reward *= 0.6^(frame_no/TIME_SCALE_ARG)，末期约 ×0.13。
+    # 制造终局压力——越早获胜收益越大，拖到 timeout 所有 reward 几乎归零。
+    TIME_SCALE_ARG = 5000
     MODEL_SAVE_INTERVAL = 1800
 
     # ---- 越程攻击惩罚（distance shaping，与 action 相关，独立于上面的帧差子项）----

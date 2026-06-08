@@ -44,6 +44,8 @@ def build_monitor():
         ("rwd_exp", "经验"),
         ("rwd_forward", "推进"),
         ("rwd_last_hit", "补刀"),
+        ("rwd_idle_penalty", "挂机惩罚"),
+        ("rwd_out_of_range", "越程惩罚"),
     ]
     builder = builder.add_group(group_name="回报子项", group_name_en="reward_items")
     for en, cn in reward_items:
@@ -63,6 +65,20 @@ def build_monitor():
     ]
     builder = builder.add_group(group_name="距离整形", group_name_en="distance_shaping")
     for en, cn, prec in shaping_items:
+        builder = (
+            builder.add_panel(name=cn, name_en=en, type="line", unit="")
+            .add_metric(metrics_name=en, expr="round(avg(%s{}), %s)" % (en, prec))
+            .end_panel()
+        )
+    builder = builder.end_group()
+
+    # ---- 挂机检测健康度 ----
+    idle_items = [
+        ("idle_triggered", "触发挂机帧数", "1"),
+        ("idle_triggered_rate", "挂机帧占比", "0.0001"),
+    ]
+    builder = builder.add_group(group_name="挂机检测", group_name_en="idle_health")
+    for en, cn, prec in idle_items:
         builder = (
             builder.add_panel(name=cn, name_en=en, type="line", unit="")
             .add_metric(metrics_name=en, expr="round(avg(%s{}), %s)" % (en, prec))

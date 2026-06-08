@@ -11,4 +11,3 @@ password.txt
 script/*.log
 script/*.pid
 script/bootstrap-proxy-server.remote.sh
-real_game*

@@ -1,0 +1,346 @@
+{
+  "total_snapshots": 4,
+  "frames": [
+    0,
+    200,
+    800,
+    1004
+  ],
+  "game_length": 1004,
+  "per_frame_summary": {
+    "0": {
+      "0": {
+        "frame_no": null,
+        "hero_count": 0,
+        "npc_count": 0,
+        "bullet_count": 0,
+        "cake_count": 0,
+        "heroes": [],
+        "npc_types": {}
+      },
+      "1": {
+        "frame_no": 56,
+        "hero_count": 2,
+        "npc_count": 6,
+        "bullet_count": 0,
+        "cake_count": 0,
+        "heroes": [
+          {
+            "config_id": 199,
+            "camp": 1,
+            "hp": 3096,
+            "max_hp": 3096,
+            "level": 1,
+            "money": 300,
+            "alive": true,
+            "location": {
+              "x": 100000,
+              "y": 100000,
+              "z": 100000
+            },
+            "actor_type": 0,
+            "sub_type": 0
+          },
+          {
+            "config_id": 112,
+            "camp": 2,
+            "hp": 3431,
+            "max_hp": 3431,
+            "level": 1,
+            "money": 300,
+            "alive": true,
+            "location": {
+              "x": 39544,
+              "y": 48,
+              "z": 39996
+            },
+            "actor_type": 0,
+            "sub_type": 0
+          }
+        ],
+        "npc_types": {
+          "actor=2,sub=24": {
+            "total": 2,
+            "alive": 2,
+            "camps": {
+              "2": 1,
+              "1": 1
+            }
+          },
+          "actor=2,sub=21": {
+            "total": 2,
+            "alive": 2,
+            "camps": {
+              "2": 1,
+              "1": 1
+            }
+          },
+          "actor=2,sub=23": {
+            "total": 2,
+            "alive": 2,
+            "camps": {
+              "2": 1,
+              "1": 1
+            }
+          }
+        }
+      }
+    },
+    "200": {
+      "0": {
+        "frame_no": null,
+        "hero_count": 0,
+        "npc_count": 0,
+        "bullet_count": 0,
+        "cake_count": 0,
+        "heroes": [],
+        "npc_types": {}
+      },
+      "1": {
+        "frame_no": 200,
+        "hero_count": 2,
+        "npc_count": 6,
+        "bullet_count": 0,
+        "cake_count": 0,
+        "heroes": [
+          {
+            "config_id": 199,
+            "camp": 1,
+            "hp": 3096,
+            "max_hp": 3096,
+            "level": 1,
+            "money": 50,
+            "alive": true,
+            "location": {
+              "x": 100000,
+              "y": 100000,
+              "z": 100000
+            },
+            "actor_type": 0,
+            "sub_type": 0
+          },
+          {
+            "config_id": 112,
+            "camp": 2,
+            "hp": 3431,
+            "max_hp": 3431,
+            "level": 1,
+            "money": 80,
+            "alive": true,
+            "location": {
+              "x": 41930,
+              "y": 48,
+              "z": 35983
+            },
+            "actor_type": 0,
+            "sub_type": 0
+          }
+        ],
+        "npc_types": {
+          "actor=2,sub=24": {
+            "total": 2,
+            "alive": 2,
+            "camps": {
+              "2": 1,
+              "1": 1
+            }
+          },
+          "actor=2,sub=21": {
+            "total": 2,
+            "alive": 2,
+            "camps": {
+              "2": 1,
+              "1": 1
+            }
+          },
+          "actor=2,sub=23": {
+            "total": 2,
+            "alive": 2,
+            "camps": {
+              "2": 1,
+              "1": 1
+            }
+          }
+        }
+      }
+    },
+    "800": {
+      "0": {
+        "frame_no": null,
+        "hero_count": 0,
+        "npc_count": 0,
+        "bullet_count": 0,
+        "cake_count": 0,
+        "heroes": [],
+        "npc_types": {}
+      },
+      "1": {
+        "frame_no": 800,
+        "hero_count": 2,
+        "npc_count": 9,
+        "bullet_count": 0,
+        "cake_count": 0,
+        "heroes": [
+          {
+            "config_id": 199,
+            "camp": 1,
+            "hp": 3096,
+            "max_hp": 3096,
+            "level": 1,
+            "money": 154,
+            "alive": true,
+            "location": {
+              "x": 100000,
+              "y": 100000,
+              "z": 100000
+            },
+            "actor_type": 0,
+            "sub_type": 0
+          },
+          {
+            "config_id": 112,
+            "camp": 2,
+            "hp": 3431,
+            "max_hp": 3431,
+            "level": 1,
+            "money": 184,
+            "alive": true,
+            "location": {
+              "x": 41930,
+              "y": 48,
+              "z": 35983
+            },
+            "actor_type": 0,
+            "sub_type": 0
+          }
+        ],
+        "npc_types": {
+          "actor=1,sub=11": {
+            "total": 3,
+            "alive": 3,
+            "camps": {
+              "2": 3
+            }
+          },
+          "actor=2,sub=24": {
+            "total": 2,
+            "alive": 2,
+            "camps": {
+              "2": 1,
+              "1": 1
+            }
+          },
+          "actor=2,sub=21": {
+            "total": 2,
+            "alive": 2,
+            "camps": {
+              "2": 1,
+              "1": 1
+            }
+          },
+          "actor=2,sub=23": {
+            "total": 2,
+            "alive": 2,
+            "camps": {
+              "2": 1,
+              "1": 1
+            }
+          }
+        }
+      }
+    },
+    "1004": {
+      "0": {
+        "frame_no": null,
+        "hero_count": 0,
+        "npc_count": 0,
+        "bullet_count": 0,
+        "cake_count": 0,
+        "heroes": [],
+        "npc_types": {}
+      },
+      "1": {
+        "frame_no": 1004,
+        "hero_count": 2,
+        "npc_count": 13,
+        "bullet_count": 1,
+        "cake_count": 0,
+        "heroes": [
+          {
+            "config_id": 199,
+            "camp": 1,
+            "hp": 3096,
+            "max_hp": 3096,
+            "level": 1,
+            "money": 302,
+            "alive": true,
+            "location": {
+              "x": -1394,
+              "y": 48,
+              "z": -2478
+            },
+            "actor_type": 0,
+            "sub_type": 0
+          },
+          {
+            "config_id": 112,
+            "camp": 2,
+            "hp": 3431,
+            "max_hp": 3431,
+            "level": 1,
+            "money": 212,
+            "alive": true,
+            "location": {
+              "x": 41930,
+              "y": 48,
+              "z": 35983
+            },
+            "actor_type": 0,
+            "sub_type": 0
+          }
+        ],
+        "npc_types": {
+          "actor=1,sub=0": {
+            "total": 1,
+            "alive": 1,
+            "camps": {
+              "0": 1
+            }
+          },
+          "actor=1,sub=11": {
+            "total": 6,
+            "alive": 5,
+            "camps": {
+              "2": 3,
+              "1": 3
+            }
+          },
+          "actor=2,sub=24": {
+            "total": 2,
+            "alive": 2,
+            "camps": {
+              "2": 1,
+              "1": 1
+            }
+          },
+          "actor=2,sub=21": {
+            "total": 2,
+            "alive": 2,
+            "camps": {
+              "2": 1,
+              "1": 1
+            }
+          },
+          "actor=2,sub=23": {
+            "total": 2,
+            "alive": 2,
+            "camps": {
+              "2": 1,
+              "1": 1
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -223,6 +223,7 @@ class EpisodeRunner:
             out_of_range_sum = 0.0        # 越程惩罚累计（负值）
             attack_action_cnt = 0         # 攻击类 action 次数
             decision_cnt = 0              # monitor_side 实际决策帧数
+            idle_triggered_cnt = 0        # idle_penalty > 0 的帧数（过宽限期）
 
             # Reward initialization
             # 回报初始化
@@ -300,6 +301,8 @@ class EpisodeRunner:
                             if p != 0.0:
                                 out_of_range_cnt += 1
                                 out_of_range_sum += p
+                            if reward.get("idle_penalty", 0.0) != 0.0:
+                                idle_triggered_cnt += 1
 
                 # Normal end or timeout exit, run train_test will exit early
                 # 正常结束或超时退出，运行train_test时会提前退出
@@ -336,6 +339,10 @@ class EpisodeRunner:
                                 monitor_data["out_of_range_rate"] = round(
                                     out_of_range_cnt / attack_action_cnt, 4)
                             monitor_data["attack_action_cnt"] = attack_action_cnt
+                            monitor_data["idle_triggered"] = idle_triggered_cnt
+                            if decision_cnt > 0:
+                                monitor_data["idle_triggered_rate"] = round(
+                                    idle_triggered_cnt / decision_cnt, 4)
 
                             # 对局结果指标：从最后一帧取 monitor_side 英雄的终局状态。
                             outcome = self._episode_outcome(observation, monitor_side)
