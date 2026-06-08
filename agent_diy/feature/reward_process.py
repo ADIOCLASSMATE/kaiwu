@@ -74,6 +74,7 @@ class GameRewardManager:
         self._last_money_cnt = 0.0
         self._last_hurt_to_hero = 0.0
         self._inactive_frames = 0
+        self._first_frame = True
 
     def result(self, frame_data):
         self.frame_data_process(frame_data)
@@ -287,6 +288,20 @@ class GameRewardManager:
                 enemy_camp = hero["camp"]
         self.set_cur_calc_frame_vec(self.m_main_calc_frame_map, frame_data, main_camp)
         self.set_cur_calc_frame_vec(self.m_enemy_calc_frame_map, frame_data, enemy_camp)
+        # 首帧同步 last 到 cur，消除 0→真实值 造成的假增量 spike
+        if self._first_frame:
+            self._first_frame = False
+            for calc_map in (self.m_main_calc_frame_map, self.m_enemy_calc_frame_map):
+                for rs in calc_map.values():
+                    rs.last_frame_value = rs.cur_frame_value
+            self._last_money_cnt = float(
+                next((h.get("money_cnt", 0) for h in frame_data.get("hero_states", [])
+                      if h.get("camp") == main_camp and h.get("hp", 0) > 0), 0)
+            )
+            self._last_hurt_to_hero = float(
+                next((h.get("total_hurt_to_hero", 0) for h in frame_data.get("hero_states", [])
+                      if h.get("camp") == main_camp and h.get("hp", 0) > 0), 0)
+            )
         # 挂机检测：基于经济/伤害产出（非位置）+ 回撤区豁免
         self._update_inactive(frame_data, main_camp)
 

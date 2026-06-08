@@ -124,9 +124,22 @@ class FeatureConfig:
     HERO_ABILITY_BITS = [0, 1, 2, 5, 7, 10, 15, 21, 31, 33]
     HERO_ABILITY_DIM = len(HERO_ABILITY_BITS)
 
+    # ---- 装备 ----
+    EQUIP_SLOTS = 6
+    EQUIP_FEAT_PER_SLOT = 4  # exists, buyPrice_soft, has_active, has_passive
+    EQUIP_DIM = EQUIP_SLOTS * EQUIP_FEAT_PER_SLOT  # = 24
+
     # ---- 各实体 token 维度 ----
+    # 英雄战斗属性归一化尺度
+    MGC_VAMP_SCALE = 10000.0       # 万分比，同 crit_rate/phy_vamp
+    ARMOR_HURT_SCALE = 200.0       # 穿透值软饱和
+    CD_REDUCE_SCALE = 10000.0      # 万分比
+    CTRL_REDUCE_SCALE = 10000.0    # 万分比
+    SIGHT_AREA_SCALE = 15000.0     # 视野范围软饱和
+    EQUIP_PRICE_SCALE = 3000.0     # 装备价格软饱和
+
     HERO_DIM = (
-        HERO_STATUS_DIM        # exists, visible, alive, time_since_seen
+        HERO_STATUS_DIM        # 4: exists, visible, alive, time_since_seen
         + 2                    # hp_ratio, ep_ratio
         + HERO_ID_ONEHOT_DIM   # 4: config one-hot (+unknown)
         + 2 + 2 + 1            # rel_pos(交战尺度), abs_pos(地图尺度), dist_to_main
@@ -134,13 +147,18 @@ class FeatureConfig:
         + 3                    # level_ratio, money_soft, exp_soft
         + 4                    # phy_atk/phy_def/mgc_atk/mgc_def 软饱和
         + 2                    # mov_spd, atk_spd 软饱和
-        + 3                    # crit_rate, crit_effe, phy_vamp（万分比 /1e4）
+        + 4                    # crit_rate, crit_effe, phy_vamp, mgc_vamp（万分比 /1e4）
         + 2                    # hp_recover, ep_recover 软饱和
+        + 2                    # phy_armor_hurt, mgc_armor_hurt 软饱和
+        + 2                    # cd_reduce, ctrl_reduce（万分比 /1e4）
+        + 1                    # sight_area 视野范围软饱和
+        + 1                    # is_in_grass 草丛隐身
         + SKILL_DIM            # 35 (8 槽 × 3 + 召唤师 one-hot 11)
         + 2                    # in_enemy_tower_range, enemy_in_my_atk_range
-        + HERO_ABILITY_DIM     # compact abilities / raw unknown bits
-        + ATTACK_TARGET_DIM    # semantic attack_target relations
-    )                          # = 83
+        + HERO_ABILITY_DIM     # 10: compact abilities / raw unknown bits
+        + ATTACK_TARGET_DIM    # 5: semantic attack_target relations
+        + EQUIP_DIM            # 24: 6 slots × 4 features
+    )                          # = 114
 
     # STRUCT_DIM: 状态块(4) + hp_ratio(1) + rel_pos(2) + abs_pos(2) + dist(1)
     #             + attack_range_soft(1) + main_in_range(1) + attack_target(5)

@@ -307,11 +307,18 @@ class FeatureBuilder:
             f.append(_clip01(hero.get("crit_rate", 0) / 10000.0))
             f.append(_clip01(hero.get("crit_effe", 0) / 10000.0))
             f.append(_clip01(hero.get("phy_vamp", 0) / 10000.0))
+            f.append(_clip01(hero.get("mgc_vamp", 0) / FC.MGC_VAMP_SCALE))
             f.append(_soft(hero.get("hp_recover", 0), 100.0))
             f.append(_soft(hero.get("ep_recover", 0), 50.0))
+            f.append(_soft(hero.get("phy_armor_hurt", 0), FC.ARMOR_HURT_SCALE))
+            f.append(_soft(hero.get("mgc_armor_hurt", 0), FC.ARMOR_HURT_SCALE))
+            f.append(_clip01(hero.get("cd_reduce", 0) / FC.CD_REDUCE_SCALE))
+            f.append(_clip01(hero.get("ctrl_reduce", 0) / FC.CTRL_REDUCE_SCALE))
+            f.append(_soft(hero.get("sight_area", 0), FC.SIGHT_AREA_SCALE))
+            f.append(1.0 if hero.get("is_in_grass", False) else 0.0)
             f += self._skill_feature(hero)
         else:
-            f += [0.0] * (3 + 4 + 2 + 3 + 2 + FC.SKILL_DIM)
+            f += [0.0] * (3 + 4 + 2 + 4 + 2 + 2 + 2 + 1 + 1 + FC.SKILL_DIM)
 
         # 交互范围标志(2)（动态）
         if is_main:
@@ -321,12 +328,13 @@ class FeatureBuilder:
             f.append(self._enemy_in_my_range(hero))
             f.append(0.0)
 
-        # abilities / attack_target 是动态状态：敌方不可见或死亡时置 0，避免雾区泄露。
+        # abilities / attack_target / equip 是动态状态：敌方不可见或死亡时置 0，避免雾区泄露。
         if observable:
             f += self._ability_feature(hero)
             f += self._attack_target_feature(hero)
+            f += self._equip_feature(hero)
         else:
-            f += [0.0] * (FC.HERO_ABILITY_DIM + FC.ATTACK_TARGET_DIM)
+            f += [0.0] * (FC.HERO_ABILITY_DIM + FC.ATTACK_TARGET_DIM + FC.EQUIP_DIM)
 
         return f
 
@@ -346,6 +354,26 @@ class FeatureBuilder:
             main_camp=self.main_camp,
             visible_fn=lambda unit, _camp: self._visible_to_main(unit),
         )
+
+    def _equip_feature(self, hero):
+        """6 格装备：每槽 [exists, buyPrice_soft, has_active, has_passive]。
+
+        不编码 configId onehot（装备 ID 空间过大）。装备价格作为档次代理；
+        主动/被动技能标志影响 button 11（装备技能）可用性判断。
+        """
+        equips = ((hero.get("equip_state", {}) or {}).get("equips", []) or [])
+        out = []
+        for i in range(FC.EQUIP_SLOTS):
+            if i < len(equips):
+                eq = equips[i]
+                has = 1.0 if eq.get("configId", 0) != 0 else 0.0
+                out.append(has)
+                out.append(_soft(eq.get("buyPrice", 0), FC.EQUIP_PRICE_SCALE))
+                out.append(1.0 if eq.get("active_skill") else 0.0)
+                out.append(1.0 if eq.get("passive_skill") else 0.0)
+            else:
+                out += [0.0] * FC.EQUIP_FEAT_PER_SLOT
+        return out
 
     def _enemy_in_my_range(self, enemy_hero):
         if enemy_hero is None:
