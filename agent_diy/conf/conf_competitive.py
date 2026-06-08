@@ -36,23 +36,24 @@ agent_diy 增强版配置（v2）。
 
 
 class GameConfig:
-    # 各奖励子项权重，在 reward_manager 中使用（8 子项简化稠密奖励）。
-    # 面向 common_ai（只会走路）训练，目标是学会基础玩法：补刀刷钱、前压推塔、存活。
-    # 所有权重针对「主英雄侧绝对值帧差」设计（非零和），因为 common_ai 不做任何操作。
+    # 各奖励子项权重，在 reward_manager 中使用（11 子项稠密奖励）。
     REWARD_WEIGHT_DICT = {
-        "enemy_tower_hp": 10.0,     # 敌方外塔血量下降（推塔=赢，最高优先）
-        "own_tower_hp": -5.0,       # 己方外塔被磨血惩罚（教防守）
-        "money_gain": 3.0,          # 经济增量（鼓励补刀刷野）
-        "exp_gain": 1.0,            # 经验增量（鼓励吃线）
-        "kill": 2.0,                # 击杀敌方英雄（common_ai 不还手，低权重）
-        "death": -8.0,              # 死亡惩罚（冲塔死 >> 击杀收益，教会敬畏防御塔）
-        "forward": 0.1,             # 站位前压 [0,1]，纯位置比例，不做 hp 乘子
-        "win": 20.0,                # 终局获胜（敌塔被摧毁的那一帧 = 1.0）
+        "tower_hp_point": 5.0,      # 推塔（判定胜负的外塔 sub_type=21），零和
+        "enemy_tower_hp": 4.0,      # 敌方外塔血量下降的正向激励，零和
+        "hp_point": 2.0,            # 自身血量比例，零和
+        "ep_rate": 0.5,             # 法力/能量比例，零和
+        "kill": 1.0,                # 击杀数差，零和
+        "death": -1.0,              # 死亡数差（权重为负，越少越好），零和
+        "money": 0.6,               # 经济差，零和
+        "exp": 0.6,                 # 经验差，零和
+        "forward": 0.05,            # 向敌方塔站位（HP 越高权重越大），非零和
+        "last_hit": 0.4,            # 补刀收益差分（降权防刷线不推塔），非零和
+        # 挂机惩罚：长时间零产出 *且* 不在回撤/泉水区时才罚。权重为负，非零和。
+        "idle_penalty": -0.15,
     }
-    # 时间衰减：reward *= 0.75^(frame_no/TIME_SCALE_ARG)。
-    # 使用 0.75 底数 + 20000 尺度，末期 ~20000 帧仍有 ~75% 奖励。
-    # 对比 competitive 版的 0.6^4=0.13，给学习阶段更多探索时间。
-    TIME_SCALE_ARG = 20000
+    # 时间衰减：reward *= 0.6^(frame_no/TIME_SCALE_ARG)，末期约 ×0.13。
+    # 制造终局压力——越早获胜收益越大，拖到 timeout 所有 reward 几乎归零。
+    TIME_SCALE_ARG = 5000
     MODEL_SAVE_INTERVAL = 1800
 
     # ---- 越程攻击惩罚（distance shaping，与 action 相关，独立于上面的帧差子项）----
