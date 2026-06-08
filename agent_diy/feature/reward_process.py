@@ -25,6 +25,8 @@ Author: Tencent AI Arena Authors
 
 import math
 from agent_diy.conf.conf import GameConfig
+from agent_diy.conf.conf import FeatureConfig as FC
+from agent_diy.feature.targeting import target_slot_enemy_soldiers, visible_to_camp
 
 TOWER_SUBTYPE = 21
 MINION_ACTOR_TYPE = 1
@@ -139,18 +141,14 @@ class GameRewardManager:
         if mh is None:
             return None
         mpos = (mh["location"]["x"], mh["location"]["z"])
-        mc = mh["camp"]
-        cand = []
-        for npc in fs.get("npc_states", []):
-            if npc.get("actor_type") == MINION_ACTOR_TYPE and npc.get("sub_type") == MINION_SUBTYPE \
-                    and npc.get("camp") != mc and npc.get("hp", 0) > 0:
-                loc = npc.get("location", {})
-                if self._is_sentinel(loc):
-                    continue
-                p = (loc["x"], loc["z"])
-                cand.append((math.hypot(p[0] - mpos[0], p[1] - mpos[1]), p))
-        cand.sort(key=lambda t: t[0])
-        return cand[k][1] if k < len(cand) else None
+        ordered = target_slot_enemy_soldiers(
+            fs.get("npc_states", []),
+            mpos,
+            mh["camp"],
+            FC.N_MINION_PER_CAMP,
+            visible_fn=visible_to_camp,
+        )
+        return ordered[k]["pos"] if k < len(ordered) else None
 
     def _nearest_monster_pos(self, fs):
         mh = self._main_hero(fs)

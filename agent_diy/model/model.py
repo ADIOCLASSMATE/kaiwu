@@ -8,8 +8,8 @@ Author: Tencent AI Arena Authors
 
 增强版模型（v2）：
 
-  实体编码：按「类型」共享投影(hero/structure/minion/monster 各 1 个) → 拼接 R 个 register
-  token → pre-LN + AdaLN-Zero Transformer(条件 = type×camp，逐 token 调制
+  实体编码：按「类型」共享投影(hero/structure/minion/monster/bullet 各 1 个) →
+  拼接 R 个 register token → pre-LN + AdaLN-Zero Transformer(条件 = type×camp，逐 token 调制
   scale/shift/gate) → 取 register token 作为学习式池化向量，拼全局特征 → LSTM(256)。
 
   动作输出：

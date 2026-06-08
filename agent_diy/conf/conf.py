@@ -22,10 +22,14 @@ agent_diy 增强版配置（v2）。
      pointer target key），但不再产生额外的 token 内特征位。
   4. target 头改为 pointer（见 model）：9 个 target 槽与 token 一一对应（见
      TARGET_SLOT_DESC），槽 0 为可学习 null key。
+  5. Soldier1-4 槽位按环境 target identity 对齐：先选最近 4 个可见存活敌方
+     soldier，再按 runtime_id 升序入 enemy_minions token。旧 checkpoint 因维度
+     和 token 语义变化不兼容，需重新训练。
 
 特征向量布局（顺序即 model._encode 切分顺序 / FeatureProcess 输出顺序）：
   [ main_hero | enemy_hero | own_tower | enemy_tower
-    | own_minion x4 | enemy_minion x4 | monster | global(GLOBAL_DIM) ]
+    | own_minion x4 | enemy_minion x4 | monster | bullet x4
+    | global(GLOBAL_DIM) ]
   其中 main_hero 固定为 token index 0。
   每个 token 第 0 维为 exists（>0.5 表示槽位被占用），供模型构造 key_padding_mask。
 """
@@ -109,6 +113,17 @@ class FeatureConfig:
     STRUCT_STATUS_DIM = 4  # exists, visible, alive, time_since_seen
     MINION_STATUS_DIM = 1  # exists
 
+    # ---- attack_target 语义关系（不编码 raw runtime_id）----
+    # has_target, targets_me, targets_enemy_hero, targets_outer_tower, targets_soldier
+    ATTACK_TARGET_DIM = 5
+
+    # ---- 英雄 abilities：紧凑白名单 + 未知 raw bit ----
+    # documented: NoControl, NoMove, NoSkill, NoMoveRotate, Blindness, Freeze,
+    # ForbidSelect, Repressed. Observed undocumented bits 31/33 are retained as
+    # raw unknown bits without naming their semantics.
+    HERO_ABILITY_BITS = [0, 1, 2, 5, 7, 10, 15, 21, 31, 33]
+    HERO_ABILITY_DIM = len(HERO_ABILITY_BITS)
+
     # ---- 各实体 token 维度 ----
     HERO_DIM = (
         HERO_STATUS_DIM        # exists, visible, alive, time_since_seen
@@ -123,28 +138,46 @@ class FeatureConfig:
         + 2                    # hp_recover, ep_recover 软饱和
         + SKILL_DIM            # 35 (8 槽 × 3 + 召唤师 one-hot 11)
         + 2                    # in_enemy_tower_range, enemy_in_my_atk_range
-    )                          # = 68
+        + HERO_ABILITY_DIM     # compact abilities / raw unknown bits
+        + ATTACK_TARGET_DIM    # semantic attack_target relations
+    )                          # = 83
 
     # STRUCT_DIM: 状态块(4) + hp_ratio(1) + rel_pos(2) + abs_pos(2) + dist(1)
-    #             + attack_range_soft(1) + main_in_range(1)
-    STRUCT_DIM = STRUCT_STATUS_DIM + 1 + 2 + 2 + 1 + 1 + 1   # = 12
+    #             + attack_range_soft(1) + main_in_range(1) + attack_target(5)
+    STRUCT_DIM = STRUCT_STATUS_DIM + 1 + 2 + 2 + 1 + 1 + 1 + ATTACK_TARGET_DIM   # = 17
 
     # NPC 资源价值/击杀成本的软饱和尺度。收益对小兵/野怪共享，便于模型比较资源目标。
     NPC_HP_SOFT_SCALE = 4000.0
     KILL_INCOME_SOFT_SCALE = 100.0
 
     # MINION_DIM: exists(1) + hp_ratio(1) + hp_soft(1) + rel_pos(2) + dist(1)
-    #             + in_my_atk_range(1) + kill_income_soft(1)
-    MINION_DIM = MINION_STATUS_DIM + 1 + 1 + 2 + 1 + 1 + 1   # = 8
+    #             + in_my_atk_range(1) + kill_income_soft(1) + attack_target(5)
+    #             + Arli mark 19900 presence/layer_ratio(2)
+    ARLI_MARK_CONFIG_ID = 19900
+    ARLI_MARK_DIM = 2
+    MINION_DIM = (
+        MINION_STATUS_DIM + 1 + 1 + 2 + 1 + 1 + 1
+        + ATTACK_TARGET_DIM + ARLI_MARK_DIM
+    )   # = 15
 
     # MONSTER_DIM: exists(1) + hp_ratio(1) + hp_soft(1) + rel_pos(2) + dist(1)
     #              + in_my_atk_range(1) + kill_income_soft(1)
+    # Probe evidence did not show resource monsters attacking; no target bits.
     MONSTER_DIM = 1 + 1 + 1 + 2 + 1 + 1 + 1   # = 8
+
+    # BULLET_DIM: exists, source_is_enemy, source hero one-hot(+unknown),
+    #             slot_type one-hot(0-3 + unknown), rel_pos(2), dist, velocity(2).
+    # Only hero-sourced bullets are encoded; skill_id was always zero in probes.
+    BULLET_SLOT_TYPES = [0, 1, 2, 3]
+    BULLET_SLOT_ONEHOT_DIM = len(BULLET_SLOT_TYPES) + 1
+    BULLET_DIM = 1 + 1 + HERO_ID_ONEHOT_DIM + BULLET_SLOT_ONEHOT_DIM + 2 + 1 + 2   # = 16
+    BULLET_VEL_SCALE = 1500.0
 
     # ---- token 数量 ----
     N_STRUCT_PER_CAMP = 1   # 仅外塔(21)
-    N_MINION_PER_CAMP = 4   # 最近 4 个小兵（与 target 槽 Soldier1-4 一致）
+    N_MINION_PER_CAMP = 4   # enemy: 最近4个后按 runtime_id 对齐 Soldier1-4；own: 距离排序
     N_MONSTER = 1           # target 槽 Monster = 最近 1 个有收益野怪
+    N_BULLETS = 4           # hero-sourced bullets, enemy hero bullets first
 
     # ---- TOKEN_SEGMENTS：(type_key, dim, count)，顺序即特征拼接顺序 ----
     # type_key 同时编码了 (实体类型, 阵营)，供模型映射「共享投影(按类型) + AdaLN 条件
@@ -157,6 +190,7 @@ class FeatureConfig:
         ("own_minions",   MINION_DIM, N_MINION_PER_CAMP),
         ("enemy_minions", MINION_DIM, N_MINION_PER_CAMP),
         ("monsters",      MONSTER_DIM, N_MONSTER),
+        ("bullets",       BULLET_DIM, N_BULLETS),
     ]
 
     # ---- 模型侧用到的语义映射（放这里做 single source of truth）----
@@ -166,22 +200,24 @@ class FeatureConfig:
         "own_tower": "structure", "enemy_tower": "structure",
         "own_minions": "minion", "enemy_minions": "minion",
         "monsters": "monster",
+        "bullets": "bullet",
     }
     CAMP_OF = {
         "main_hero": "ego", "enemy_hero": "enemy",
         "own_tower": "own", "enemy_tower": "enemy",
         "own_minions": "own", "enemy_minions": "enemy",
         "monsters": "neutral",
+        "bullets": "neutral",
     }
     # AdaLN 条件 = type_key（每个 type_key 唯一对应一个 (type,camp) 组合）。
     COND_KEYS = ["main_hero", "enemy_hero", "own_tower",
                  "enemy_tower", "own_minions", "enemy_minions",
-                 "monsters"]
+                 "monsters", "bullets"]
 
     # ---- target 头 (label[5]) 的 9 个槽：含义 + key 来源 ----
     # key 来源为 token type_key 的，pointer 直接取该实体的 transformer 输出；
-    # 为 None 的（None）使用可学习 null key。Soldier1-4 = 最近 4 个敌方小兵，
-    # 与 enemy_minions 的入槽顺序（按到主英雄距离升序）一一对应。
+    # 为 None 的（None）使用可学习 null key。Soldier1-4 = 最近4个可见存活
+    # 敌方 soldier 中按 runtime_id 升序的槽位；该规则由 feature.targeting 共享。
     TARGET_SLOT_DESC = [
         ("None",       None),            # 0
         ("EnemyHero",  "enemy_hero"),    # 1
@@ -201,9 +237,9 @@ class FeatureConfig:
     GLOBAL_DIM = 9
 
     # ---- 总 token 数 / token 特征长度 / 总特征维度 ----
-    NUM_TOKENS = sum(count for _, _, count in TOKEN_SEGMENTS)            # 13
-    TOKEN_FEATURE_DIM = sum(dim * count for _, dim, count in TOKEN_SEGMENTS)  # 232
-    FEATURE_DIM = TOKEN_FEATURE_DIM + GLOBAL_DIM                          # 241
+    NUM_TOKENS = sum(count for _, _, count in TOKEN_SEGMENTS)            # 17
+    TOKEN_FEATURE_DIM = sum(dim * count for _, dim, count in TOKEN_SEGMENTS)  # 392
+    FEATURE_DIM = TOKEN_FEATURE_DIM + GLOBAL_DIM                          # 401
 
     # ---- 坐标重定标常量 ----
     MAP_SCALE = 46000.0

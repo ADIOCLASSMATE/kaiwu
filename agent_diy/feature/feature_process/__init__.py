@@ -12,7 +12,7 @@ FeatureProcess: 把环境 observation 转成 FeatureConfig.FEATURE_DIM 维特征
   main_hero(HERO_DIM) | enemy_hero(HERO_DIM)
   | own_tower(STRUCT_DIM)          | enemy_tower(STRUCT_DIM)
   | own_minions x4 (MINION_DIM)    | enemy_minions x4 (MINION_DIM)
-  | monster(MONSTER_DIM)
+  | monster(MONSTER_DIM)           | hero bullets x4 (BULLET_DIM)
   | global(GLOBAL_DIM)
 
 关键约定：
@@ -24,6 +24,9 @@ FeatureProcess: 把环境 observation 转成 FeatureConfig.FEATURE_DIM 维特征
   - 数值经软饱和 value/(value+K) 或固定尺度归一，避免依赖精确上限。
   - 相对位移用 ENGAGE_SCALE 后 clip 到 [-1,1] 再线性映射到 [0,1]；
     绝对位置用 MAP_SCALE；整体距离用 DIST_SCALE。
+  - Soldier1-4 target 槽：敌方小兵先选最近 4 个，再按 runtime_id 升序入槽。
+  - bullet 只编码 hero-sourced projectile；NPC/minion/tower projectile 不入槽。
+  - monster 未观测到 attack_target 语义，保持资源/位置/血量特征，不加目标关系。
 """
 
 from agent_diy.feature.feature_process.builder import FeatureBuilder

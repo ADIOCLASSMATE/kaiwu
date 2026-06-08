@@ -26,13 +26,15 @@ last-seen 记忆作为实例状态保存（不会跨局污染）。仅在「当�
 
 import math
 from agent_diy.conf.conf import FeatureConfig as FC
-
-
-# 只保留外塔(21)。二塔(24)/水晶(23) 在 1v1 既非目标也无决策价值，直接忽略。
-TOWER_SUBTYPE = 21
-MINION_SUBTYPE = 11        # 实测小兵 sub_type=11（actor_type=1）
-BUILDING_ACTOR_TYPE = 2
-MINION_ACTOR_TYPE = 1
+from agent_diy.feature.targeting import (
+    BUILDING_ACTOR_TYPE,
+    MINION_ACTOR_TYPE,
+    MINION_SUBTYPE,
+    TOWER_SUBTYPE,
+    actor_map,
+    attack_target_features,
+    target_slot_enemy_soldiers,
+)
 
 
 def _soft(value, k):
@@ -71,6 +73,8 @@ class FeatureBuilder:
         # key ∈ {"main_hero","enemy_hero","own_tower","enemy_tower"}。
         # 野怪可能随机刷新，当前不可见/不存在时不沿用 last-seen，避免 stale 资源误导。
         self._mem = {}
+        # bullet 速度记忆：FeatureProcess.reset 每局重建 builder，避免跨局污染。
+        self._bullet_mem = {}
 
     # ---- 坐标工具 ----
     def _is_sentinel(self, loc):
@@ -131,7 +135,9 @@ class FeatureBuilder:
     def build(self, frame_state):
         heroes = frame_state.get("hero_states", [])
         npcs = frame_state.get("npc_states", [])
+        bullets = frame_state.get("bullets", []) or []
         frame_no = frame_state.get("frame_no", 0)
+        self._actors = actor_map(frame_state)
 
         main_hero, enemy_hero = None, None
         for h in heroes:
@@ -139,6 +145,8 @@ class FeatureBuilder:
                 main_hero = h
             else:
                 enemy_hero = h
+        self._main_hero_ref = main_hero
+        self._enemy_hero_ref = enemy_hero
 
         # 主英雄基准位置
         self._main_pos = None
@@ -187,9 +195,19 @@ class FeatureBuilder:
         feat += self._tower_token(enemy_tower, "enemy_tower", frame_no)
         # ---- minions（按到主英雄距离取最近 N）----
         feat += self._minion_tokens(own_minions)
-        feat += self._minion_tokens(enemy_minions)
+        enemy_items = target_slot_enemy_soldiers(
+            enemy_minions,
+            self._main_pos,
+            self.main_camp,
+            FC.N_MINION_PER_CAMP,
+            mirror=self.mirror,
+            visible_fn=lambda unit, _camp: self._visible_to_main(unit),
+        )
+        feat += self._minion_tokens(enemy_minions, ordered_items=enemy_items)
         # ---- monster（按到主英雄距离取最近 N；当前 N=1）----
         feat += self._monster_tokens(monsters)
+        # ---- hero-sourced bullets（enemy first）----
+        feat += self._bullet_tokens(bullets, frame_no)
         # ---- global ----
         feat += self._global_feature(frame_no, main_hero, enemy_hero, own_tower, enemy_tower)
 
@@ -303,7 +321,31 @@ class FeatureBuilder:
             f.append(self._enemy_in_my_range(hero))
             f.append(0.0)
 
+        # abilities / attack_target 是动态状态：敌方不可见或死亡时置 0，避免雾区泄露。
+        if observable:
+            f += self._ability_feature(hero)
+            f += self._attack_target_feature(hero)
+        else:
+            f += [0.0] * (FC.HERO_ABILITY_DIM + FC.ATTACK_TARGET_DIM)
+
         return f
+
+    def _ability_feature(self, hero):
+        abilities = hero.get("abilities", []) or []
+        out = []
+        for index in FC.HERO_ABILITY_BITS:
+            out.append(1.0 if index < len(abilities) and abilities[index] else 0.0)
+        return out
+
+    def _attack_target_feature(self, actor):
+        return attack_target_features(
+            actor,
+            self._actors,
+            main_hero=self._main_hero_ref,
+            enemy_hero=self._enemy_hero_ref,
+            main_camp=self.main_camp,
+            visible_fn=lambda unit, _camp: self._visible_to_main(unit),
+        )
 
     def _enemy_in_my_range(self, enemy_hero):
         if enemy_hero is None:
@@ -391,23 +433,30 @@ class FeatureBuilder:
         if observable and d is not None and atk_range > 0 and d <= atk_range:
             in_range = 1.0
         f.append(in_range)
+        f += self._attack_target_feature(npc) if observable else [0.0] * FC.ATTACK_TARGET_DIM
         return f
 
     # ---- 小兵 tokens ----
-    def _minion_tokens(self, minions):
-        valid = []
-        for m in minions:
-            loc = m.get("location", {})
-            if self._is_sentinel(loc):
-                continue
-            if not self._visible_to_main(m):
-                continue
-            if m.get("hp", 0) <= 0:
-                continue
-            pos = self._xz(loc)
-            d = self._dist_to_main(pos)
-            valid.append((d if d is not None else 1e18, m, pos, d))
-        valid.sort(key=lambda t: t[0])
+    def _minion_tokens(self, minions, ordered_items=None):
+        if ordered_items is None:
+            valid = []
+            for m in minions:
+                loc = m.get("location", {})
+                if self._is_sentinel(loc):
+                    continue
+                if not self._visible_to_main(m):
+                    continue
+                if m.get("hp", 0) <= 0:
+                    continue
+                pos = self._xz(loc)
+                d = self._dist_to_main(pos)
+                valid.append((d if d is not None else 1e18, m, pos, d))
+            valid.sort(key=lambda t: t[0])
+        else:
+            valid = [
+                (item["distance"], item["unit"], item["pos"], item["distance"])
+                for item in ordered_items
+            ]
 
         out = []
         n = FC.N_MINION_PER_CAMP
@@ -433,7 +482,17 @@ class FeatureBuilder:
         f.append(_clip01(d / FC.DIST_SCALE) if d is not None else 0.0)
         f.append(self._in_main_atk_range(pos))
         f.append(_soft(m.get("kill_income", 0), FC.KILL_INCOME_SOFT_SCALE))
+        f += self._attack_target_feature(m)
+        f += self._arli_mark_feature(m)
         return f
+
+    def _arli_mark_feature(self, actor):
+        marks = ((actor.get("buff_state", {}) or {}).get("buff_marks", []) or [])
+        for mark in marks:
+            if mark.get("configId") == FC.ARLI_MARK_CONFIG_ID:
+                layer = mark.get("layer", 0) or 0
+                return [1.0, _clip01(layer / 3.0)]
+        return [0.0, 0.0]
 
     # ---- 野怪 token ----
     def _monster_tokens(self, monsters):
@@ -473,6 +532,87 @@ class FeatureBuilder:
         f.append(_clip01(d / FC.DIST_SCALE) if d is not None else 0.0)
         f.append(self._in_main_atk_range(pos))
         f.append(_soft(m.get("kill_income", 0), FC.KILL_INCOME_SOFT_SCALE))
+        return f
+
+    # ---- hero bullet tokens ----
+    def _bullet_tokens(self, bullets, frame_no):
+        candidates = []
+        current_ids = set()
+        for bullet in bullets:
+            source = self._actors.get(bullet.get("source_actor"))
+            if source is None or source.get("actor_type") != 0:
+                continue
+            loc = bullet.get("location", {}) or {}
+            if self._is_sentinel(loc):
+                continue
+            pos = self._xz(loc)
+            d = self._dist_to_main(pos)
+            runtime_id = bullet.get("runtime_id")
+            current_ids.add(runtime_id)
+            previous = self._bullet_mem.get(runtime_id)
+            vx, vz = 0.0, 0.0
+            if previous is not None and frame_no != previous["frame_no"]:
+                delta = frame_no - previous["frame_no"]
+                if delta > 0:
+                    vx = (pos[0] - previous["x"]) / delta
+                    vz = (pos[1] - previous["z"]) / delta
+            self._bullet_mem[runtime_id] = {
+                "frame_no": frame_no,
+                "x": pos[0],
+                "z": pos[1],
+            }
+            source_enemy = source.get("camp") != self.main_camp
+            candidates.append(
+                (
+                    0 if source_enemy else 1,
+                    d if d is not None else 1e18,
+                    runtime_id if runtime_id is not None else 0,
+                    bullet,
+                    source,
+                    pos,
+                    d,
+                    vx,
+                    vz,
+                )
+            )
+
+        self._bullet_mem = {
+            rid: value for rid, value in self._bullet_mem.items()
+            if rid in current_ids
+        }
+        candidates.sort(key=lambda item: (item[0], item[1], item[2]))
+
+        out = []
+        for i in range(FC.N_BULLETS):
+            if i < len(candidates):
+                _, _, _, bullet, source, pos, d, vx, vz = candidates[i]
+                out += self._bullet_token(bullet, source, pos, d, vx, vz)
+            else:
+                out += [0.0] * FC.BULLET_DIM
+        return out
+
+    def _bullet_token(self, bullet, source, pos, d, vx, vz):
+        f = [1.0]
+        f.append(1.0 if source.get("camp") != self.main_camp else 0.0)
+
+        cid = source.get("config_id")
+        hero_onehot = [1.0 if cid == h else 0.0 for h in FC.HERO_CONFIG_IDS]
+        hero_onehot.append(1.0 if cid not in FC.HERO_CONFIG_IDS else 0.0)
+        f += hero_onehot
+
+        slot = bullet.get("slot_type")
+        slot_onehot = [1.0 if slot == st else 0.0 for st in FC.BULLET_SLOT_TYPES]
+        slot_onehot.append(1.0 if slot not in FC.BULLET_SLOT_TYPES else 0.0)
+        f += slot_onehot
+
+        if self._main_pos is not None:
+            f.append(_rel_to01(pos[0] - self._main_pos[0], FC.ENGAGE_SCALE))
+            f.append(_rel_to01(pos[1] - self._main_pos[1], FC.ENGAGE_SCALE))
+        else:
+            f += [0.5, 0.5]
+        f.append(_clip01(d / FC.DIST_SCALE) if d is not None else 0.0)
+        f.append(_rel_to01(vx, FC.BULLET_VEL_SCALE))
+        f.append(_rel_to01(vz, FC.BULLET_VEL_SCALE))
         return f
 
     # ---- 全局特征 ----
