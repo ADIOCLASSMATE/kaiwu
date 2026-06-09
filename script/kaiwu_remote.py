@@ -50,6 +50,14 @@ DEFAULT_EXCLUDE_PATTERNS = {
     "script/bootstrap-proxy-server.remote.sh",
 }
 
+SYNC_INCLUDE = {
+    "agent_diy",
+    "agent_ppo",
+    "conf",
+    "kaiwu.json",
+    "train_test.py",
+}
+
 
 def load_env_file() -> dict[str, str]:
     values: dict[str, str] = {}
@@ -361,12 +369,20 @@ def make_payload() -> tuple[Path, int, int]:
     archive = Path(temp_name)
     count = 0
     with tarfile.open(archive, "w:gz") as tar:
-        for path in ROOT.rglob("*"):
-            if should_exclude(path):
+        for include_prefix in sorted(SYNC_INCLUDE):
+            path = ROOT / include_prefix
+            if not path.exists():
                 continue
             if path.is_file():
-                tar.add(path, arcname=str(path.relative_to(ROOT)))
+                tar.add(path, arcname=include_prefix)
                 count += 1
+            elif path.is_dir():
+                for file in path.rglob("*"):
+                    if should_exclude(file):
+                        continue
+                    if file.is_file():
+                        tar.add(file, arcname=str(file.relative_to(ROOT)))
+                        count += 1
     return archive, archive.stat().st_size, count
 
 
@@ -390,6 +406,7 @@ def sync(args: argparse.Namespace) -> None:
             )
             proxy_request("GET", f"/write?{query}", timeout=args.wait)
         remote_code_dir = cfg("REMOTE_CODE_DIR", "/workspace/code")
+        rm_targets = " ".join(f"{remote_code_dir}/{p}" for p in sorted(SYNC_INCLUDE))
         cmd = (
             "set -e; "
             "python3 - <<'PY'\n"
@@ -398,12 +415,7 @@ def sync(args: argparse.Namespace) -> None:
             "open('/tmp/kaiwu_sync_payload.tgz', 'wb').write(base64.b64decode(data))\n"
             "PY\n"
             f"mkdir -p {remote_code_dir}; "
-            f"rm -f "
-            f"{remote_code_dir}/script/*_env_agent.py "
-            f"{remote_code_dir}/script/*-env-agent.sh "
-            f"{remote_code_dir}/script/bootstrap-*-agent.remote.sh "
-            f"{remote_code_dir}/script/bootstrap-proxy-server.remote.sh "
-            f"{remote_code_dir}/script/*_server.log; "
+            f"rm -rf {rm_targets}; "
             f"tar -xzf /tmp/kaiwu_sync_payload.tgz -C {remote_code_dir}; "
             "rm -f .kaiwu_sync_payload.tgz.b64 /tmp/kaiwu_sync_payload.tgz; "
             f"cd {remote_code_dir}; "
