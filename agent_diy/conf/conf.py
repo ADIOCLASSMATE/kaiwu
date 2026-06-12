@@ -17,7 +17,7 @@ agent_diy 增强版配置（v2）。
      不可见实体（如雾中的敌英雄）不再整 token 清零，而是保留「最后已知位置」+
      「消失多久」，由模型自己决定要不要采信。
   3. camp 不再用 token 内 camp_is_main 原始位编码，也不再用 own_/enemy_ 拆两套投影；
-     改为「type 共享投影(3 个) + (type×camp) AdaLN 条件」在模型侧注入。
+     改为「按实体类型共享投影 + (type×camp) AdaLN 条件」在模型侧注入。
      own/enemy 区分仍体现在 TOKEN_SEGMENTS 的 type_key（用于映射 AdaLN 条件、
      pointer target key），但不再产生额外的 token 内特征位。
   4. target 头改为 pointer（见 model）：9 个 target 槽与 token 一一对应（见
@@ -29,10 +29,32 @@ agent_diy 增强版配置（v2）。
 特征向量布局（顺序即 model._encode 切分顺序 / FeatureProcess 输出顺序）：
   [ main_hero | enemy_hero | own_tower | enemy_tower
     | own_minion x4 | enemy_minion x4 | monster | bullet x4
+    | cake x2
     | global(GLOBAL_DIM) ]
   其中 main_hero 固定为 token index 0。
   每个 token 第 0 维为 exists（>0.5 表示槽位被占用），供模型构造 key_padding_mask。
 """
+
+
+def _build_field_slices(fields):
+    field_slices = {}
+    offset = 0
+    for name, width in fields:
+        field_slices[name] = slice(offset, offset + width)
+        offset += width
+    return field_slices
+
+
+def _build_token_slices(token_segments):
+    token_slices = {}
+    offset = 0
+    for type_key, dim, count in token_segments:
+        ranges = []
+        for _ in range(count):
+            ranges.append(slice(offset, offset + dim))
+            offset += dim
+        token_slices[type_key] = tuple(ranges)
+    return token_slices
 
 
 class GameConfig:
@@ -109,6 +131,25 @@ class FeatureConfig:
 
     SKILL_DIM = len(SKILL_SLOT_TYPES) * SKILL_FEAT_PER_SLOT + SUMMONER_ONEHOT_DIM   # 8*3 + 11 = 35
 
+    # ---- 三英雄共用的私有状态协议 ----
+    # 固定 10 维，不为不同英雄改变 token 长度：
+    #   passive_phase: phase0..phase4 + unknown = 6
+    #   active_variant: slot1/slot2/slot3 是否处于非基础 configId = 3
+    #   private_unknown: 英雄或被动阶段无法识别 = 1
+    HERO_PRIVATE_PHASE_DIM = 6
+    HERO_ACTIVE_VARIANT_DIM = 3
+    HERO_PRIVATE_DIM = HERO_PRIVATE_PHASE_DIM + HERO_ACTIVE_VARIANT_DIM + 1
+    HERO_PASSIVE_PHASE_IDS = {
+        112: {11200: 0, 11201: 1, 11202: 2, 11203: 3, 11204: 4},
+        133: {13300: 0, 13301: 1, 13302: 2},
+        199: {19900: 0, 19901: 1, 19902: 2, 19903: 3, 19904: 4},
+    }
+    HERO_ACTIVE_BASE_IDS = {
+        112: {1: 11210, 2: 11220, 3: 11230},
+        133: {1: 13310, 2: 13320, 3: 13330},
+        199: {1: 19910, 2: 19920, 3: 19930},
+    }
+
     # ---- token 通用状态块（解耦后的 present）----
     # 所有 token 第 0 维都是 exists（padding 位）。其余状态位按实体类型不同：
     #   hero/tower: exists, visible, alive, time_since_seen, ...
@@ -139,27 +180,30 @@ class FeatureConfig:
     CD_REDUCE_SCALE = 10000.0      # 万分比
     CTRL_REDUCE_SCALE = 10000.0    # 万分比
 
-    HERO_DIM = (
-        HERO_STATUS_DIM        # 4: exists, visible, alive, time_since_seen
-        + 2                    # hp_ratio, ep_ratio
-        + HERO_ID_ONEHOT_DIM   # 4: config one-hot (+unknown)
-        + 2 + 2 + 1            # rel_pos(交战尺度), abs_pos(地图尺度), dist_to_main
-        + 2                    # forward 朝向 (归一化 x,z)
-        + 3                    # level_ratio, money_soft, exp_soft
-        + 4                    # phy_atk/phy_def/mgc_atk/mgc_def 软饱和
-        + 2                    # mov_spd, atk_spd 软饱和
-        + 4                    # crit_rate, crit_effe, phy_vamp, mgc_vamp（万分比 /1e4）
-        + 2                    # hp_recover, ep_recover 软饱和
-        + 2                    # phy_armor_hurt, mgc_armor_hurt 软饱和
-        + 2                    # cd_reduce, ctrl_reduce（万分比 /1e4）
-        + 1                    # sight_area 视野范围软饱和
-        + 1                    # is_in_grass 草丛隐身
-        + SKILL_DIM            # 35 (8 槽 × 3 + 召唤师 one-hot 11)
-        + 2                    # in_enemy_tower_range, enemy_in_my_atk_range
-        + HERO_ABILITY_DIM     # 10: compact abilities / raw unknown bits
-        + ATTACK_TARGET_DIM    # 5: semantic attack_target relations
-        + EQUIP_DIM            # 24: 6 slots × 4 features
-    )                          # = 114
+    HERO_FIELDS = (
+        ("status", HERO_STATUS_DIM),
+        ("vitals", 2),
+        ("hero_id", HERO_ID_ONEHOT_DIM),
+        ("position", 5),
+        ("forward", 2),
+        ("progress", 3),
+        ("offense_defense", 4),
+        ("movement_attack_speed", 2),
+        ("crit_vamp", 4),
+        ("recovery", 2),
+        ("armor_hurt", 2),
+        ("reductions", 2),
+        ("sight", 1),
+        ("in_grass", 1),
+        ("skills", SKILL_DIM),
+        ("private_state", HERO_PRIVATE_DIM),
+        ("range_flags", 2),
+        ("abilities", HERO_ABILITY_DIM),
+        ("attack_target", ATTACK_TARGET_DIM),
+        ("equipment", EQUIP_DIM),
+    )
+    HERO_FIELD_SLICES = _build_field_slices(HERO_FIELDS)
+    HERO_DIM = sum(width for _, width in HERO_FIELDS)  # 124
 
     # STRUCT_DIM: 状态块(4) + hp_ratio(1) + rel_pos(2) + abs_pos(2) + dist(1)
     #             + attack_range_soft(1) + main_in_range(1) + attack_target(5)
@@ -168,13 +212,25 @@ class FeatureConfig:
 
     # MINION_DIM: exists(1) + hp_ratio(1) + hp_soft(1) + rel_pos(2) + dist(1)
     #             + in_my_atk_range(1) + kill_income_soft(1) + attack_target(5)
-    #             + Arli mark 19900 presence/layer_ratio(2)
+    #             + Arli mark 19900 presence/layer_ratio(2) + minion type(7)
     ARLI_MARK_CONFIG_ID = 19900
     ARLI_MARK_DIM = 2
-    MINION_DIM = (
-        MINION_STATUS_DIM + 1 + 1 + 2 + 1 + 1 + 1
-        + ATTACK_TARGET_DIM + ARLI_MARK_DIM
-    )   # = 15
+    MINION_CONFIG_IDS = [6800, 6801, 6802, 6803, 6804, 6805]
+    MINION_TYPE_DIM = len(MINION_CONFIG_IDS) + 1
+    MINION_FIELDS = (
+        ("exists", MINION_STATUS_DIM),
+        ("hp_ratio", 1),
+        ("hp_soft", 1),
+        ("relative_position", 2),
+        ("distance", 1),
+        ("in_attack_range", 1),
+        ("kill_income", 1),
+        ("attack_target", ATTACK_TARGET_DIM),
+        ("arli_mark", ARLI_MARK_DIM),
+        ("minion_type", MINION_TYPE_DIM),
+    )
+    MINION_FIELD_SLICES = _build_field_slices(MINION_FIELDS)
+    MINION_DIM = sum(width for _, width in MINION_FIELDS)  # 22
 
     # MONSTER_DIM: exists(1) + hp_ratio(1) + hp_soft(1) + rel_pos(2) + dist(1)
     #              + in_my_atk_range(1) + kill_income_soft(1)
@@ -189,11 +245,22 @@ class FeatureConfig:
     BULLET_DIM = 1 + 1 + HERO_ID_ONEHOT_DIM + BULLET_SLOT_ONEHOT_DIM + 2 + 1 + 2   # = 16
     BULLET_VEL_SCALE = 1500.0
 
+    # CAKE_DIM: exists + rel_pos(2) + abs_pos(2) + distance
+    CAKE_FIELDS = (
+        ("exists", 1),
+        ("relative_position", 2),
+        ("absolute_position", 2),
+        ("distance", 1),
+    )
+    CAKE_FIELD_SLICES = _build_field_slices(CAKE_FIELDS)
+    CAKE_DIM = sum(width for _, width in CAKE_FIELDS)  # 6
+
     # ---- token 数量 ----
     N_STRUCT_PER_CAMP = 1   # 仅外塔(21)
     N_MINION_PER_CAMP = 4   # enemy: 最近4个后按 runtime_id 对齐 Soldier1-4；own: 距离排序
     N_MONSTER = 1           # target 槽 Monster = 最近 1 个有收益野怪
     N_BULLETS = 4           # hero-sourced bullets, enemy hero bullets first
+    N_CAKES = 2             # 地图上同时最多观测到两个神符
 
     # ---- TOKEN_SEGMENTS：(type_key, dim, count)，顺序即特征拼接顺序 ----
     # type_key 同时编码了 (实体类型, 阵营)，供模型映射「共享投影(按类型) + AdaLN 条件
@@ -207,7 +274,9 @@ class FeatureConfig:
         ("enemy_minions", MINION_DIM, N_MINION_PER_CAMP),
         ("monsters",      MONSTER_DIM, N_MONSTER),
         ("bullets",       BULLET_DIM, N_BULLETS),
+        ("cakes",         CAKE_DIM, N_CAKES),
     ]
+    TOKEN_SLICES = _build_token_slices(TOKEN_SEGMENTS)
 
     # ---- 模型侧用到的语义映射（放这里做 single source of truth）----
     # 每个 type_key 的「类型」(决定共享投影) 与「阵营」(连同类型决定 AdaLN 条件)。
@@ -217,6 +286,7 @@ class FeatureConfig:
         "own_minions": "minion", "enemy_minions": "minion",
         "monsters": "monster",
         "bullets": "bullet",
+        "cakes": "cake",
     }
     CAMP_OF = {
         "main_hero": "ego", "enemy_hero": "enemy",
@@ -224,11 +294,12 @@ class FeatureConfig:
         "own_minions": "own", "enemy_minions": "enemy",
         "monsters": "neutral",
         "bullets": "neutral",
+        "cakes": "neutral",
     }
     # AdaLN 条件 = type_key（每个 type_key 唯一对应一个 (type,camp) 组合）。
     COND_KEYS = ["main_hero", "enemy_hero", "own_tower",
                  "enemy_tower", "own_minions", "enemy_minions",
-                 "monsters", "bullets"]
+                 "monsters", "bullets", "cakes"]
 
     # ---- target 头 (label[5]) 的 9 个槽：含义 + key 来源 ----
     # key 来源为 token type_key 的，pointer 直接取该实体的 transformer 输出；
@@ -253,9 +324,9 @@ class FeatureConfig:
     GLOBAL_DIM = 9
 
     # ---- 总 token 数 / token 特征长度 / 总特征维度 ----
-    NUM_TOKENS = sum(count for _, _, count in TOKEN_SEGMENTS)            # 17
-    TOKEN_FEATURE_DIM = sum(dim * count for _, dim, count in TOKEN_SEGMENTS)  # 392
-    FEATURE_DIM = TOKEN_FEATURE_DIM + GLOBAL_DIM                          # 401
+    NUM_TOKENS = sum(count for _, _, count in TOKEN_SEGMENTS)            # 19
+    TOKEN_FEATURE_DIM = sum(dim * count for _, dim, count in TOKEN_SEGMENTS)  # 542
+    FEATURE_DIM = TOKEN_FEATURE_DIM + GLOBAL_DIM                          # 551
 
     # ---- 坐标重定标常量 ----
     MAP_SCALE = 46000.0
@@ -284,6 +355,7 @@ class Config:
     # 空列表 = 输入直连输出；[256] = 一层 256 隐层（旧行为）
     LABEL_HEAD_HIDDEN_DIMS = []     # [] = 直连，[256] = 恢复旧行为
     VALUE_HEAD_HIDDEN_DIMS = []
+    ACTOR_ADAPTER_DIM = 32
 
     # 特征 / 合法动作维度（派生自 FeatureConfig）
     FEATURE_DIM = FeatureConfig.FEATURE_DIM

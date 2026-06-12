@@ -8,12 +8,13 @@ Author: Tencent AI Arena Authors
 
 增强版模型（v2）：
 
-  实体编码：按「类型」共享投影(hero/structure/minion/monster/bullet 各 1 个) →
+  实体编码：按「类型」共享投影(hero/structure/minion/monster/bullet/cake 各 1 个) →
   拼接 R 个 register token → pre-LN + AdaLN-Zero Transformer(条件 = type×camp，逐 token 调制
   scale/shift/gate) → 取 register token 作为学习式池化向量，拼全局特征 → LSTM(256)。
 
   动作输出：
-    - label[0..4]：button / 方向，沿用 MLP(LSTM 输出) 头。
+    - label[0..4]：button / 方向，共享 MLP 头 + 按主英雄路由的零初始化
+      residual adapter。
     - label[5]   ：target 选择，改为 pointer —— query=LSTM 输出，key=各 target 槽
       对应实体的 transformer 输出（槽 None 用可学习 null key），logits =
       query·key / sqrt(d)。这样逐实体隐状态被 target 头直接消费，而非池化丢弃。
@@ -64,6 +65,21 @@ class MLP(nn.Module):
 
     def forward(self, data):
         return self.fc_layers(data)
+
+
+class ActorResidualAdapter(nn.Module):
+    """Low-rank hero-specific residual over the five shared actor heads."""
+
+    def __init__(self, input_dim, bottleneck_dim, output_dim):
+        super().__init__()
+        self.down = make_fc_layer(input_dim, bottleneck_dim)
+        self.activation = nn.GELU()
+        self.up = nn.Linear(bottleneck_dim, output_dim)
+        nn.init.zeros_(self.up.weight)
+        nn.init.zeros_(self.up.bias)
+
+    def forward(self, data):
+        return self.up(self.activation(self.down(data)))
 
 
 class AdaLNBlock(nn.Module):
@@ -149,7 +165,7 @@ class Model(nn.Module):
                 off += dim
         assert off == self.token_feature_dim
 
-        # ---- 按「类型」共享的投影（hero/structure/minion 各一个）----
+        # ---- 按实体类型共享投影，敌我差异由后续 AdaLN 条件注入 ----
         self.proj_key_of = dict(FeatureConfig.TYPE_OF)
         proj_in = {}
         for type_key, dim, count in self.token_segments:
@@ -202,6 +218,15 @@ class Model(nn.Module):
                 [self.lstm_unit_size] + Config.LABEL_HEAD_HIDDEN_DIMS + [self.label_size_list[i]],
                 "hero_label{0}_mlp".format(i))
             for i in range(self.n_categorical_heads)
+        })
+        self.shared_actor_dim = sum(self.label_size_list[:self.n_categorical_heads])
+        self.actor_adapters = ModuleDict({
+            str(hero_id): ActorResidualAdapter(
+                self.lstm_unit_size,
+                Config.ACTOR_ADAPTER_DIM,
+                self.shared_actor_dim,
+            )
+            for hero_id in FeatureConfig.HERO_CONFIG_IDS
         })
         self.value_mlp = MLP(
             [self.lstm_unit_size] + Config.VALUE_HEAD_HIDDEN_DIMS + [1],
@@ -287,6 +312,42 @@ class Model(nn.Module):
         logits = (keys * q.unsqueeze(1)).sum(dim=-1) / (d ** 0.5)  # (bt, num_target_slots)
         return logits
 
+    def _shared_actor_logits(self, recurrent_state):
+        return [
+            self.label_mlp["hero_label{0}_mlp".format(index)](recurrent_state)
+            for index in range(self.n_categorical_heads)
+        ]
+
+    def _hero_route_weights(self, feature_vec):
+        main_hero = FeatureConfig.TOKEN_SLICES["main_hero"][0]
+        hero_id = FeatureConfig.HERO_FIELD_SLICES["hero_id"]
+        start = main_hero.start + hero_id.start
+        stop = start + len(FeatureConfig.HERO_CONFIG_IDS)
+        return feature_vec[:, start:stop]
+
+    def _actor_residual(self, recurrent_state, feature_vec):
+        route_weights = self._hero_route_weights(feature_vec)
+        adapter_outputs = torch.stack(
+            [
+                self.actor_adapters[str(hero_id)](recurrent_state)
+                for hero_id in FeatureConfig.HERO_CONFIG_IDS
+            ],
+            dim=1,
+        )
+        return (adapter_outputs * route_weights.unsqueeze(-1)).sum(dim=1)
+
+    def _actor_logits(self, recurrent_state, feature_vec):
+        shared_logits = self._shared_actor_logits(recurrent_state)
+        residual = self._actor_residual(recurrent_state, feature_vec)
+        residual_heads = residual.split(
+            self.label_size_list[:self.n_categorical_heads],
+            dim=1,
+        )
+        return [
+            shared_head + residual_head
+            for shared_head, residual_head in zip(shared_logits, residual_heads)
+        ]
+
     def forward(self, data_list, inference=False):
         feature_vec, lstm_hidden_init, lstm_cell_init = data_list
 
@@ -305,9 +366,7 @@ class Model(nn.Module):
         self.lstm_cell_output = cn
         flat = lstm_out.reshape(bt, self.lstm_unit_size)
 
-        result_list = []
-        for i in range(self.n_categorical_heads):                 # label[0..4]
-            result_list.append(self.label_mlp["hero_label{0}_mlp".format(i)](flat))
+        result_list = self._actor_logits(flat, feature_vec)          # label[0..4]
         result_list.append(self._target_pointer(flat, entity_out))  # label[5] = pointer
         value_result = self.value_mlp(flat)
         result_list.append(value_result)

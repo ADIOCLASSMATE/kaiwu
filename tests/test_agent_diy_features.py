@@ -2,25 +2,19 @@
 # -*- coding: UTF-8 -*-
 
 import copy
-import json
 import math
 import unittest
-from pathlib import Path
 
 from agent_diy.conf.conf import Config, FeatureConfig as FC
 from agent_diy.feature.feature_process.builder import FeatureBuilder, _rel_to01
 from agent_diy.feature.reward_process import GameRewardManager
 from agent_diy.feature.targeting import target_slot_enemy_soldiers
-
-
-ROOT = Path(__file__).resolve().parents[1]
-PROBES = ROOT / "diag_feature_probes"
-
-
-def load_obs(rel_path):
-    data = json.loads((PROBES / rel_path).read_text(encoding="utf-8"))
-    observations = data["observation"]
-    return next(iter(observations.values()))
+from tests.feature_test_utils import (
+    hero_field,
+    load_obs,
+    minion_field,
+    token_slice,
+)
 
 
 def token_layout():
@@ -31,13 +25,6 @@ def token_layout():
             layout.append((type_key, index, offset, dim))
             offset += dim
     return layout
-
-
-def token_slice(feature, type_key, index=0):
-    for key, idx, offset, dim in token_layout():
-        if key == type_key and idx == index:
-            return feature[offset:offset + dim]
-    raise AssertionError(f"missing token {type_key}[{index}]")
 
 
 def main_pos(obs, mirror=False):
@@ -101,8 +88,7 @@ class AgentDiyFeatureProbeTests(unittest.TestCase):
         obs = load_obs("episode_02/frame_01214.json")
         feature = FeatureBuilder(obs["camp"]).build(obs["frame_state"])
         enemy = token_slice(feature, "enemy_hero")
-        ability_start = FC.HERO_DIM - FC.HERO_ABILITY_DIM - FC.ATTACK_TARGET_DIM - 1
-        ability_values = enemy[ability_start:ability_start + FC.HERO_ABILITY_DIM]
+        ability_values = hero_field(enemy, "abilities")
         by_bit = dict(zip(FC.HERO_ABILITY_BITS, ability_values))
         self.assertEqual(by_bit[1], 1.0)
         self.assertEqual(by_bit[31], 1.0)
@@ -114,7 +100,7 @@ class AgentDiyFeatureProbeTests(unittest.TestCase):
         hidden_enemy["abilities"][33] = True
         feature = FeatureBuilder(hidden_obs["camp"]).build(mutated)
         enemy = token_slice(feature, "enemy_hero")
-        ability_values = enemy[ability_start:ability_start + FC.HERO_ABILITY_DIM]
+        ability_values = hero_field(enemy, "abilities")
         self.assertEqual(sum(ability_values), 0.0)
 
     def test_arli_mark_layers_on_enemy_minions(self):
@@ -144,9 +130,9 @@ class AgentDiyFeatureProbeTests(unittest.TestCase):
                     slot = [item["unit"]["runtime_id"] for item in ordered].index(runtime_id)
                 feature = FeatureBuilder(obs["camp"]).build(obs["frame_state"])
                 minion = token_slice(feature, type_key, slot)
-                mark_start = FC.MINION_DIM - FC.ARLI_MARK_DIM
-                self.assertEqual(minion[mark_start], 1.0)
-                self.assertAlmostEqual(minion[mark_start + 1], layer_ratio)
+                arli_mark = minion_field(minion, "arli_mark")
+                self.assertEqual(arli_mark[0], 1.0)
+                self.assertAlmostEqual(arli_mark[1], layer_ratio)
 
     def test_attack_target_semantics_from_frame_5258(self):
         obs = load_obs("episode_02/frame_05258.json")
@@ -160,14 +146,12 @@ class AgentDiyFeatureProbeTests(unittest.TestCase):
         feature = FeatureBuilder(obs["camp"]).build(obs["frame_state"])
 
         minion = token_slice(feature, "enemy_minions", slot)
-        attack_start = FC.MINION_DIM - FC.ARLI_MARK_DIM - FC.ATTACK_TARGET_DIM
-        has_target, targets_me, *_ = minion[attack_start:attack_start + FC.ATTACK_TARGET_DIM]
+        has_target, targets_me, *_ = minion_field(minion, "attack_target")
         self.assertEqual(has_target, 1.0)
         self.assertEqual(targets_me, 1.0)
 
         hero = token_slice(feature, "enemy_hero")
-        hero_attack_start = FC.HERO_DIM - FC.ATTACK_TARGET_DIM - 1
-        hero_bits = hero[hero_attack_start:hero_attack_start + FC.ATTACK_TARGET_DIM]
+        hero_bits = hero_field(hero, "attack_target")
         self.assertEqual(hero_bits[0], 1.0)
         self.assertEqual(hero_bits[3], 1.0)
 

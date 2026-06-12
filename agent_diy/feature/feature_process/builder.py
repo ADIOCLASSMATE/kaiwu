@@ -16,12 +16,15 @@ FeatureBuilder（v2）：构造 FEATURE_DIM 维特征向量。
   - 删除 camp_is_main 原始位（敌我由模型侧 type_key / AdaLN 条件区分）。
   - 增加 1 个资源野怪 token：仅收入 kill_income>0 的非小兵 NPC，排除泉水等
     无收益单位；Monster target 槽可 pointer 到该 token。
+  - 英雄增加固定长度的三英雄通用私有状态块；小兵增加 config_id 类型 one-hot；
+    地图 cake 作为独立 token 输入。
 
 跨帧记忆：FeatureBuilder 每局由 FeatureProcess.reset 重建，故可安全地把
 last-seen 记忆作为实例状态保存（不会跨局污染）。仅在「当前可观测」时更新记忆，
 保证 last-known 信息全部来自本方过去的真实观测。
 
-所有输出值落在 [0, 1]（相对位移先 clip[-1,1] 再映射到 [0,1]）。
+比率和位置特征主要落在 [0, 1]；重尾数值使用 log(1+x) 压缩，可能大于 1，
+随后由模型输入 LayerNorm 统一尺度。
 """
 
 import math
@@ -137,6 +140,7 @@ class FeatureBuilder:
         heroes = frame_state.get("hero_states", [])
         npcs = frame_state.get("npc_states", [])
         bullets = frame_state.get("bullets", []) or []
+        cakes = frame_state.get("cakes", []) or []
         frame_no = frame_state.get("frame_no", 0)
         self._actors = actor_map(frame_state)
 
@@ -209,6 +213,8 @@ class FeatureBuilder:
         feat += self._monster_tokens(monsters)
         # ---- hero-sourced bullets（enemy first）----
         feat += self._bullet_tokens(bullets, frame_no)
+        # ---- cakes（按到主英雄距离排序，最多两个）----
+        feat += self._cake_tokens(cakes)
         # ---- global ----
         feat += self._global_feature(frame_no, main_hero, enemy_hero, own_tower, enemy_tower)
 
@@ -318,8 +324,12 @@ class FeatureBuilder:
             f.append(_log_compress(hero.get("sight_area", 0)))
             f.append(1.0 if hero.get("is_in_grass", False) else 0.0)
             f += self._skill_feature(hero)
+            f += self._hero_private_feature(hero)
         else:
-            f += [0.0] * (3 + 4 + 2 + 4 + 2 + 2 + 2 + 1 + 1 + FC.SKILL_DIM)
+            f += [0.0] * (
+                3 + 4 + 2 + 4 + 2 + 2 + 2 + 1 + 1
+                + FC.SKILL_DIM + FC.HERO_PRIVATE_DIM
+            )
 
         # 交互范围标志(2)（动态）
         if is_main:
@@ -338,6 +348,39 @@ class FeatureBuilder:
             f += [0.0] * (FC.HERO_ABILITY_DIM + FC.ATTACK_TARGET_DIM + FC.EQUIP_DIM)
 
         return f
+
+    def _hero_private_feature(self, hero):
+        """Return the fixed-width private state block shared by all heroes."""
+        hero_id = hero.get("config_id")
+        slots = {
+            slot.get("slot_type"): slot
+            for slot in ((hero.get("skill_state", {}) or {}).get("slot_states", []) or [])
+        }
+
+        phase = [0.0] * FC.HERO_PRIVATE_PHASE_DIM
+        passive = slots.get(0)
+        passive_id = passive.get("configId") if passive else None
+        phase_map = FC.HERO_PASSIVE_PHASE_IDS.get(hero_id)
+        phase_index = phase_map.get(passive_id) if phase_map is not None else None
+        unknown = phase_index is None
+        if phase_index is None:
+            phase[-1] = 1.0
+        else:
+            phase[phase_index] = 1.0
+
+        active_variants = []
+        active_base_ids = FC.HERO_ACTIVE_BASE_IDS.get(hero_id, {})
+        for slot_type in (1, 2, 3):
+            slot = slots.get(slot_type)
+            config_id = slot.get("configId") if slot else None
+            base_id = active_base_ids.get(slot_type)
+            active_variants.append(
+                1.0
+                if config_id is not None and base_id is not None and config_id != base_id
+                else 0.0
+            )
+
+        return phase + active_variants + [1.0 if unknown else 0.0]
 
     def _ability_feature(self, hero):
         abilities = hero.get("abilities", []) or []
@@ -513,7 +556,17 @@ class FeatureBuilder:
         f.append(_log_compress(m.get("kill_income", 0)))
         f += self._attack_target_feature(m)
         f += self._arli_mark_feature(m)
+        f += self._minion_type_feature(m)
         return f
+
+    def _minion_type_feature(self, minion):
+        config_id = minion.get("config_id")
+        onehot = [
+            1.0 if config_id == known_id else 0.0
+            for known_id in FC.MINION_CONFIG_IDS
+        ]
+        onehot.append(1.0 if config_id not in FC.MINION_CONFIG_IDS else 0.0)
+        return onehot
 
     def _arli_mark_feature(self, actor):
         marks = ((actor.get("buff_state", {}) or {}).get("buff_marks", []) or [])
@@ -643,6 +696,52 @@ class FeatureBuilder:
         f.append(_rel_to01(vx, FC.BULLET_VEL_SCALE))
         f.append(_rel_to01(vz, FC.BULLET_VEL_SCALE))
         return f
+
+    # ---- cake tokens ----
+    def _cake_tokens(self, cakes):
+        candidates = []
+        for cake in cakes:
+            loc = ((cake.get("collider", {}) or {}).get("location", {}) or {})
+            if not loc or self._is_sentinel(loc):
+                continue
+            pos = self._xz(loc)
+            distance = self._dist_to_main(pos)
+            candidates.append(
+                (
+                    distance if distance is not None else 1e18,
+                    pos[0],
+                    pos[1],
+                    pos,
+                    distance,
+                )
+            )
+        candidates.sort(key=lambda item: (item[0], item[1], item[2]))
+
+        out = []
+        for index in range(FC.N_CAKES):
+            if index < len(candidates):
+                _, _, _, pos, distance = candidates[index]
+                out += self._cake_token(pos, distance)
+            else:
+                out += [0.0] * FC.CAKE_DIM
+        return out
+
+    def _cake_token(self, pos, distance):
+        if self._main_pos is None:
+            relative_position = [0.5, 0.5]
+        else:
+            relative_position = [
+                _rel_to01(pos[0] - self._main_pos[0], FC.ENGAGE_SCALE),
+                _rel_to01(pos[1] - self._main_pos[1], FC.ENGAGE_SCALE),
+            ]
+        absolute_position = [
+            _clip01((pos[0] + FC.MAP_SCALE) / (2 * FC.MAP_SCALE)),
+            _clip01((pos[1] + FC.MAP_SCALE) / (2 * FC.MAP_SCALE)),
+        ]
+        normalized_distance = (
+            _clip01(distance / FC.DIST_SCALE) if distance is not None else 0.0
+        )
+        return [1.0] + relative_position + absolute_position + [normalized_distance]
 
     # ---- 全局特征 ----
     def _global_feature(self, frame_no, main_hero, enemy_hero, own_tower, enemy_tower):
