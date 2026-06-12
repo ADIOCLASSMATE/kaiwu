@@ -73,8 +73,11 @@ class GameRewardManager:
         # 挂机检测：跟踪产出类累计值的上帧快照
         self._last_money_cnt = 0.0
         self._last_hurt_to_hero = 0.0
+        self._last_pos = None
         self._inactive_frames = 0
         self._first_frame = True
+        # 距离整形：当前帧 action 的越程攻击惩罚，由 workflow 在 predict 后注入
+        self._distance_penalty = 0.0
 
     def result(self, frame_data):
         self.frame_data_process(frame_data)
@@ -120,6 +123,10 @@ class GameRewardManager:
             return 0.0
         dist = math.hypot(tpos[0] - mpos[0], tpos[1] - mpos[1])
         return -w if dist > atk_range else 0.0
+
+    def set_distance_penalty(self, action, decided_frame_state):
+        """由 workflow 在 predict/exploit 后调用，注入当前 action 的距离惩罚。"""
+        self._distance_penalty = self.out_of_range_penalty(action, decided_frame_state)
 
     # ---- distance shaping 辅助：定位主英雄 / 敌英雄 / 第 k 近敌方小兵 / 最近野怪 ----
     def _main_hero(self, fs):
@@ -178,6 +185,16 @@ class GameRewardManager:
     @staticmethod
     def _is_sentinel(loc):
         return abs(loc.get("x", 0)) >= SENTINEL or abs(loc.get("z", 0)) >= SENTINEL
+
+    @staticmethod
+    def _get_main_hero_pos(frame_data, main_camp):
+        """获取主英雄的 (x, z) 位置，失败返回 None。"""
+        for h in frame_data.get("hero_states", []):
+            if h.get("camp") == main_camp and h.get("hp", 0) > 0:
+                loc = h.get("location", {})
+                if abs(loc.get("x", 0)) < SENTINEL and abs(loc.get("z", 0)) < SENTINEL:
+                    return (loc["x"], loc["z"])
+        return None
 
     # ---- 工具 ----
     @staticmethod
@@ -302,6 +319,8 @@ class GameRewardManager:
                 next((h.get("total_hurt_to_hero", 0) for h in frame_data.get("hero_states", [])
                       if h.get("camp") == main_camp and h.get("hp", 0) > 0), 0)
             )
+            # 首帧位置快照（挂机检测位置增量基准）
+            self._last_pos = self._get_main_hero_pos(frame_data, main_camp)
         # 挂机检测：基于经济/伤害产出（非位置）+ 回撤区豁免
         self._update_inactive(frame_data, main_camp)
 
@@ -334,24 +353,36 @@ class GameRewardManager:
         return dist_hero_to_enemy > dist_own_to_enemy * IDLE_RETREAT_RATIO
 
     def _update_inactive(self, frame_data, main_camp):
-        """挂机计数更新（纯产出停滞 + 回撤/泉水冻结）：
-          - 真有产出（任一增量>0）→ 清零；
+        """挂机计数更新（位置 + 产出双重判据 + 回撤/泉水冻结）：
+          - 有显著位移 → 清零（过滤 ambient gold 假复位）；
+          - 停滞但仍有产出（任一增量>0）→ 清零；
           - 产出停滞 且 在回撤区（泉水回血/后方回城）→ 冻结（不增不减）；
           - 产出停滞 且 不在回撤区 → 累加。
         死亡（hero=None）也视为累加，鼓励尽快复活投入战斗。
-        冻结而非清零是关键：否则 agent 可踏进回撤区 1 帧归零、再出来发呆，
-        反复横跳永远凑不满宽限期，惩罚被绕过（与兵线原地抽搐同类漏洞）。
         """
         hero = None
+        cur_pos = None
         for h in frame_data.get("hero_states", []):
             if h.get("camp") == main_camp and h.get("hp", 0) > 0:
                 loc = h.get("location", {})
                 if not self._is_sentinel(loc):
                     hero = h
+                    cur_pos = (loc["x"], loc["z"])
                     break
 
         if hero is None:
             self._inactive_frames += 1
+            return
+
+        # 位置增量：有显著位移则清零（独立于产出，避免 ambient gold 假复位）
+        pos_moved = False
+        if self._last_pos is not None and cur_pos is not None:
+            dist = math.hypot(cur_pos[0] - self._last_pos[0], cur_pos[1] - self._last_pos[1])
+            pos_moved = (dist > GameConfig.IDLE_POS_DELTA_THRESHOLD)
+        self._last_pos = cur_pos
+
+        if pos_moved:
+            self._inactive_frames = 0
             return
 
         cur_money = float(hero.get("money_cnt", 0))
@@ -403,4 +434,7 @@ class GameRewardManager:
                 rs.value = rs.cur_frame_value - rs.last_frame_value
             reward_sum += rs.value * rs.weight
             reward_dict[reward_name] = rs.value
+        reward_dict["distance_penalty"] = self._distance_penalty
+        reward_sum += self._distance_penalty
+        self._distance_penalty = 0.0
         reward_dict["reward_sum"] = reward_sum

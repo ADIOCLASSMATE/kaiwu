@@ -245,6 +245,11 @@ class EpisodeRunner:
                         # Only sample when do_sample=True and is_eval=False
                         # 评估对局数据不采样，不是训练中最新模型产生的数据不采样
                         if not is_eval and do_sample:
+                            # 距离整形：基于做出决策时的 frame_state 计算越程攻击惩罚
+                            agent.reward_manager.set_distance_penalty(
+                                actions[index],
+                                observation[str(index)]["frame_state"],
+                            )
                             frame = build_frame(agent, observation[str(index)])
                             frame_collector.save_frame(frame, agent_id=index)
 
@@ -308,6 +313,10 @@ class EpisodeRunner:
                             # 对局结果指标：从最后一帧取 monitor_side 英雄的终局状态。
                             outcome = self._episode_outcome(observation, monitor_side)
                             monitor_data.update(outcome)
+
+                            # 特征健康度：整局聚合指标（NaN/Inf/负值检测 + 各 token 组统计）
+                            feat_stats = self.agents[monitor_side].get_feature_stats()
+                            monitor_data.update(feat_stats)
 
                             self.monitor.put_data({os.getpid(): monitor_data})
                             self.last_report_monitor_time = now

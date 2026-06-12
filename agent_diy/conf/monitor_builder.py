@@ -20,6 +20,87 @@ def build_monitor():
 
     builder = monitor.title("智能体决策1V1")
 
+    # ============================================================
+    # 特征健康度（全特征覆盖：有效性 + 占位率 + 激活度 + 死特征）
+    # ============================================================
+
+    # ---- 特征有效性：NaN / Inf / 负值（任何 >0 即 bug）----
+    validity_items = [
+        ("feat_nan", "NaN数", "1"),
+        ("feat_inf", "Inf数", "1"),
+        ("feat_neg", "负值数", "1"),
+    ]
+    builder = builder.add_group(group_name="特征有效性", group_name_en="feature_validity")
+    for en, cn, prec in validity_items:
+        builder = (
+            builder.add_panel(name=cn, name_en=en, type="line", unit="")
+            .add_metric(metrics_name=en, expr="round(avg(%s{}), %s)" % (en, prec))
+            .end_panel()
+        )
+    builder = builder.end_group()
+
+    # ---- Token 占位率（exists 标志均值）----
+    tok_labels = [
+        ("main_hero", "主英雄"),
+        ("enemy_hero", "敌英雄"),
+        ("own_tower", "己方塔"),
+        ("enemy_tower", "敌方塔"),
+        ("own_minions", "己方小兵"),
+        ("enemy_minions", "敌方小兵"),
+        ("monsters", "野怪"),
+        ("bullets", "弹道"),
+    ]
+    builder = builder.add_group(group_name="Token占位率", group_name_en="token_exists")
+    for en, cn in tok_labels:
+        metric = "feat_%s_exists" % en
+        builder = (
+            builder.add_panel(name=cn, name_en=metric, type="line", unit="")
+            .add_metric(metrics_name=metric, expr="round(avg(%s{}), 0.001)" % metric)
+            .end_panel()
+        )
+    builder = builder.end_group()
+
+    # ---- Token 激活度：均值 ----
+    builder = builder.add_group(group_name="Token激活均值", group_name_en="token_act_mean")
+    for en, cn in tok_labels:
+        metric = "feat_%s_mean" % en
+        builder = (
+            builder.add_panel(name=cn, name_en=metric, type="line", unit="")
+            .add_metric(metrics_name=metric, expr="round(avg(%s{}), 0.0001)" % metric)
+            .end_panel()
+        )
+    builder = builder.end_group()
+
+    # ---- Token 激活度：标准差 ----
+    builder = builder.add_group(group_name="Token激活波动", group_name_en="token_act_std")
+    for en, cn in tok_labels:
+        metric = "feat_%s_std" % en
+        builder = (
+            builder.add_panel(name=cn, name_en=metric, type="line", unit="")
+            .add_metric(metrics_name=metric, expr="round(avg(%s{}), 0.0001)" % metric)
+            .end_panel()
+        )
+    builder = builder.end_group()
+
+    # ---- 死特征维度数（整局 std ≈ 0 的维度数）----
+    builder = builder.add_group(group_name="死特征维度", group_name_en="dead_dims")
+    for en, cn in tok_labels:
+        metric = "feat_%s_dead" % en
+        builder = (
+            builder.add_panel(name=cn, name_en=metric, type="line", unit="")
+            .add_metric(metrics_name=metric, expr="round(avg(%s{}), 1)" % metric)
+            .end_panel()
+        )
+    # global 段
+    for en, cn in [("global", "全局段")]:
+        metric = "feat_%s_dead" % en
+        builder = (
+            builder.add_panel(name=cn, name_en=metric, type="line", unit="")
+            .add_metric(metrics_name=metric, expr="round(avg(%s{}), 1)" % metric)
+            .end_panel()
+        )
+    builder = builder.end_group()
+
     # ---- 算法/回报指标 ----
     builder = (
         builder.add_group(group_name="回报指标", group_name_en="reward")
@@ -97,6 +178,51 @@ def build_monitor():
     ]
     builder = builder.add_group(group_name="对局结果", group_name_en="outcome")
     for en, cn, prec in outcome_items:
+        builder = (
+            builder.add_panel(name=cn, name_en=en, type="line", unit="")
+            .add_metric(metrics_name=en, expr="round(avg(%s{}), %s)" % (en, prec))
+            .end_panel()
+        )
+    builder = builder.end_group()
+
+    # ---- 训练指标：loss / 梯度 / 学习率 ----
+    train_items = [
+        ("total_loss", "总损失", "0.01"),
+        ("value_loss", "价值损失", "0.01"),
+        ("policy_loss", "策略损失", "0.01"),
+        ("entropy_loss", "熵损失", "0.01"),
+        ("grad_norm", "梯度范数", "0.0001"),
+        ("learning_rate", "学习率", "0.00000001"),
+    ]
+    builder = builder.add_group(group_name="训练指标", group_name_en="training")
+    for en, cn, prec in train_items:
+        builder = (
+            builder.add_panel(name=cn, name_en=en, type="line", unit="")
+            .add_metric(metrics_name=en, expr="round(avg(%s{}), %s)" % (en, prec))
+            .end_panel()
+        )
+    builder = builder.end_group()
+
+    # ---- 策略熵分解：检测各动作头是否过早坍缩 ----
+    head_names = ["head_0", "head_1", "head_2", "head_3", "head_4", "head_5"]
+    head_labels = ["主标签-12", "方向1-16", "方向2-16", "方向3-16", "方向4-16", "目标-9"]
+    builder = builder.add_group(group_name="策略熵分解", group_name_en="entropy_per_head")
+    for en_suffix, cn_suffix in zip(head_names, head_labels):
+        en = "entropy_" + en_suffix
+        builder = (
+            builder.add_panel(name=cn_suffix, name_en=en, type="line", unit="")
+            .add_metric(metrics_name=en, expr="round(avg(%s{}), 0.0001)" % en)
+            .end_panel()
+        )
+    builder = builder.end_group()
+
+    # ---- advantage 统计量 ----
+    adv_items = [
+        ("adv_mean", "Advantage均值", "0.0001"),
+        ("adv_std", "Advantage标准差", "0.0001"),
+    ]
+    builder = builder.add_group(group_name="Advantage统计", group_name_en="advantage")
+    for en, cn, prec in adv_items:
         builder = (
             builder.add_panel(name=cn, name_en=en, type="line", unit="")
             .add_metric(metrics_name=en, expr="round(avg(%s{}), %s)" % (en, prec))

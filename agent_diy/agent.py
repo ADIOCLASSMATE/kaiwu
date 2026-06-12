@@ -182,6 +182,10 @@ class Agent(BaseAgent):
         self.lstm_cell = act_data.lstm_cell
         self.lstm_hidden = act_data.lstm_hidden
 
+    def get_feature_stats(self):
+        """返回整局特征健康度聚合指标，调用后内部累加器归零。"""
+        return self.feature_processes.get_stats()
+
     # ---- 以下采样契约函数原样保留（不得改动语义）----
     def _sample_masked_action(self, logits, legal_action):
         prob_list = []

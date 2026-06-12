@@ -60,6 +60,10 @@ class Algorithm:
         results["total_loss"] = total_loss.item()
 
         total_loss.backward()
+
+        # 梯度范数（裁剪前），检测梯度消失/爆炸
+        raw_grad_norm = self._compute_grad_norm()
+
         if Config.USE_GRAD_CLIP:
             torch.nn.utils.clip_grad_norm_(self.parameters, Config.GRAD_CLIP_RANGE)
         self.optimizer.step()
@@ -79,7 +83,32 @@ class Algorithm:
             results["value_loss"] = round(value_loss, 2)
             results["policy_loss"] = round(policy_loss, 2)
             results["entropy_loss"] = round(entropy_loss, 2)
+
+            # 梯度范数
+            results["grad_norm"] = round(raw_grad_norm, 4)
+
+            # 学习率
+            results["learning_rate"] = round(self.optimizer.param_groups[0]["lr"], 8)
+
+            # 各动作头熵（检测策略是否过早坍缩）
+            head_names = ["head_0", "head_1", "head_2", "head_3", "head_4", "head_5"]
+            if hasattr(self.model, "entropy_cost_list"):
+                for name, ent in zip(head_names, self.model.entropy_cost_list):
+                    results["entropy_" + name] = round(ent.item(), 4)
+
+            # advantage 统计量（检测 advantage 是否有意义）
+            adv_tensor = data_list[2]  # usq_advantage
+            results["adv_mean"] = round(adv_tensor.mean().item(), 4)
+            results["adv_std"] = round(adv_tensor.std().item(), 4)
+
             if self.monitor:
                 self.monitor.put_data({os.getpid(): results})
             self.last_report_monitor_time = now
         return results
+
+    def _compute_grad_norm(self):
+        total_norm = 0.0
+        for p in self.parameters:
+            if p.grad is not None:
+                total_norm += p.grad.data.norm(2).item() ** 2
+        return total_norm ** 0.5
