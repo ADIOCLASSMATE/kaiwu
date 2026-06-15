@@ -24,6 +24,7 @@ def make_hero(
     money_cnt=0,
     kill_cnt=0,
     dead_cnt=0,
+    attack_range=5000,
     x=0,
     z=0,
 ):
@@ -41,6 +42,7 @@ def make_hero(
         "kill_cnt": kill_cnt,
         "dead_cnt": dead_cnt,
         "total_hurt_to_hero": 0,
+        "attack_range": attack_range,
         "location": {"x": x, "z": z},
     }
 
@@ -307,6 +309,45 @@ class RewardDesignTests(unittest.TestCase):
             0.0,
         )
         self.assertEqual(draw_reward["terminal"], 0.0)
+
+    def test_out_of_range_penalty_is_one_shot_and_action_conditioned(self):
+        frame = make_frame(
+            main=make_hero(MAIN_ID, 1, attack_range=1000, x=0),
+            enemy=make_hero(ENEMY_ID, 2, x=5000),
+        )
+        attack_enemy = [3, 0, 0, 0, 0, 1]
+
+        self.assertEqual(
+            self.manager.out_of_range_penalty([0, 0, 0, 0, 0, 1], frame),
+            0.0,
+        )
+        self.manager.set_distance_penalty(attack_enemy, frame)
+        reward = self.manager.result(frame)
+        next_reward = self.manager.result(frame)
+
+        self.assertEqual(
+            reward["distance_penalty"],
+            -GameConfig.OUT_OF_RANGE_PENALTY,
+        )
+        self.assertEqual(next_reward["distance_penalty"], 0.0)
+
+    def test_idle_penalty_has_bounded_per_frame_scale(self):
+        frame = make_frame()
+        self.manager.result(frame)
+        self.manager._inactive_frames = (
+            GameConfig.IDLE_GRACE_FRAMES + GameConfig.IDLE_RAMP_FRAMES
+        )
+
+        reward = self.manager.result(frame)
+
+        self.assertEqual(
+            reward["idle_penalty"],
+            GameConfig.IDLE_FRAME_SCALE,
+        )
+        self.assertGreater(
+            reward["idle_penalty"] * GameConfig.REWARD_WEIGHT_DICT["idle_penalty"],
+            -0.01,
+        )
 
 
 if __name__ == "__main__":
