@@ -115,18 +115,17 @@ def build_monitor():
 
     # ---- reward 子项分解：看清回报由什么驱动 ----
     reward_items = [
-        ("rwd_tower_hp_point", "己方塔血量"),
-        ("rwd_enemy_tower_hp", "敌方塔血量"),
-        ("rwd_hp_point", "自身血量"),
-        ("rwd_ep_rate", "能量"),
+        ("rwd_tower_hp_point", "塔血优势"),
+        ("rwd_hp_point", "英雄血量优势"),
         ("rwd_kill", "击杀"),
-        ("rwd_death", "死亡"),
-        ("rwd_money", "经济"),
-        ("rwd_exp", "经验"),
-        ("rwd_forward", "推进"),
-        ("rwd_last_hit", "补刀"),
+        ("rwd_money", "累计经济优势"),
+        ("rwd_exp", "累计经验优势"),
+        ("rwd_forward", "前压进展"),
+        ("rwd_last_hit", "英雄补刀"),
+        ("rwd_kill_monster", "野怪控制"),
         ("rwd_idle_penalty", "挂机惩罚"),
-        ("rwd_out_of_range", "越程惩罚"),
+        ("rwd_distance_penalty", "越程惩罚"),
+        ("rwd_terminal", "终局结果"),
     ]
     builder = builder.add_group(group_name="回报子项", group_name_en="reward_items")
     for en, cn in reward_items:

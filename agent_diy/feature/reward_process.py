@@ -256,7 +256,10 @@ class GameRewardManager:
                     )
                     rs.cur_frame_value = (tower_hp, attacking_enemy)
                 else:
-                    rs.cur_frame_value = rs.last_frame_value
+                    previous = rs.last_frame_value
+                    if not isinstance(previous, tuple):
+                        previous = (0.0, False)
+                    rs.cur_frame_value = previous
             elif reward_name == "hp_point":
                 rs.cur_frame_value = self._hp_ratio(hero)
             elif reward_name == "kill":
