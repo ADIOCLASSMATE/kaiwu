@@ -208,7 +208,7 @@ class RewardDesignTests(unittest.TestCase):
         )
         advanced = make_frame(
             frame_no=1,
-            main=make_hero(MAIN_ID, 1, x=0),
+            main=make_hero(MAIN_ID, 1, x=-5000),
         )
         stationary = copy.deepcopy(advanced)
         stationary["frame_no"] = 2

@@ -6,21 +6,17 @@
 """
 Author: Tencent AI Arena Authors
 
-11 子项稠密奖励管理器。
+目标优先的稠密奖励管理器。
 
 零和子项（主-敌之差的帧间增量）：
-  tower_hp_point, enemy_tower_hp, hp_point, ep_rate, kill, death, money, exp
+  tower_hp_point, hp_point, kill, money, exp
 非零和子项（仅主视角）：
-  forward（向敌方塔站位，HP 越高权重越大；处于敌塔范围内不给，防贴脸白嫖）、
-  last_hit（补刀收益差分）、
+  forward（安全前压势函数的帧间增量）、
+  last_hit / kill_monster（dead_action 事件归因）、
   idle_penalty（挂机惩罚：经济/伤害产出停滞且不在回撤/泉水区时累计，权重为负）
 
 判定胜负的塔 = 外塔 sub_type=21（reward 按它跟踪）。二塔(24)/水晶(23) 不参与。
-
-注意（设计权衡，非 bug）：
-  补一个兵会同时抬升 money_cnt（→ last_hit）与 money（→ money 子项），即补刀
-  被 last_hit 与 money 各计一次。这是有意放大补刀吸引力；若发现过度刷线不打架，
-  优先调小 last_hit 权重。
+终局胜负奖励独立于 shaping，不做时间衰减。
 """
 
 import math
@@ -51,14 +47,29 @@ def init_calc_frame_map():
     return calc_frame_map
 
 
-# 非零和子项：直接用主视角值，不做主-敌相减。
-NON_ZERO_SUM = {"forward", "last_hit", "idle_penalty"}
-
 # ---- 挂机检测参数（从 GameConfig 读取，集中管理）----
 IDLE_GRACE_FRAMES = GameConfig.IDLE_GRACE_FRAMES
 IDLE_RAMP_FRAMES = GameConfig.IDLE_RAMP_FRAMES
 IDLE_RETREAT_RATIO = GameConfig.IDLE_RETREAT_RATIO
 IDLE_MAX_VALUE = GameConfig.IDLE_MAX_VALUE
+
+# 升到下一级所需经验。累计后可消除升级时 exp 字段清零造成的负奖励。
+EXP_TO_NEXT_LEVEL = {
+    1: 160,
+    2: 298,
+    3: 446,
+    4: 524,
+    5: 613,
+    6: 713,
+    7: 825,
+    8: 950,
+    9: 1088,
+    10: 1240,
+    11: 1406,
+    12: 1585,
+    13: 1778,
+    14: 1984,
+}
 
 
 class GameRewardManager:
@@ -78,6 +89,9 @@ class GameRewardManager:
         self._first_frame = True
         # 距离整形：当前帧 action 的越程攻击惩罚，由 workflow 在 predict 后注入
         self._distance_penalty = 0.0
+        self._last_hit_event = 0.0
+        self._monster_event = 0.0
+        self._terminal_applied = False
 
     def result(self, frame_data):
         self.frame_data_process(frame_data)
@@ -86,7 +100,7 @@ class GameRewardManager:
         if self.time_scale_arg > 0:
             for key in self.m_reward_value:
                 self.m_reward_value[key] *= math.pow(0.6, 1.0 * frame_no / self.time_scale_arg)
-        return self.m_reward_value
+        return dict(self.m_reward_value)
 
     def out_of_range_penalty(self, action, decided_frame_state):
         """越程攻击惩罚（distance shaping）。
@@ -202,14 +216,16 @@ class GameRewardManager:
         if hero is None:
             return 0.0
         mh = hero.get("max_hp", 0) or 1
-        return max(0.0, min(1.0, hero.get("hp", 0) / mh))
+        ratio = max(0.0, min(1.0, hero.get("hp", 0) / mh))
+        return math.sqrt(ratio)
 
     @staticmethod
-    def _ep_ratio(hero):
+    def _total_exp(hero):
         if hero is None:
             return 0.0
-        me = hero.get("max_ep", 0) or 1
-        return max(0.0, min(1.0, hero.get("ep", 0) / me))
+        level = max(1, int(hero.get("level", 1) or 1))
+        total = sum(EXP_TO_NEXT_LEVEL.get(i, 0) for i in range(1, level))
+        return total + float(hero.get("exp", 0) or 0)
 
     def _get_camp_units(self, frame_data, camp):
         hero = None
@@ -224,34 +240,37 @@ class GameRewardManager:
 
     def set_cur_calc_frame_vec(self, calc_map, frame_data, camp):
         hero, tower = self._get_camp_units(frame_data, camp)
+        enemy_hero = next(
+            (item for item in frame_data.get("hero_states", [])
+             if item.get("camp") != camp),
+            None,
+        )
         for reward_name, rs in calc_map.items():
             rs.last_frame_value = rs.cur_frame_value
-            if reward_name in ("tower_hp_point", "enemy_tower_hp"):
+            if reward_name == "tower_hp_point":
                 if tower is not None and tower.get("max_hp", 0) > 0:
-                    rs.cur_frame_value = 1.0 * tower["hp"] / tower["max_hp"]
+                    tower_hp = 1.0 * tower["hp"] / tower["max_hp"]
+                    attacking_enemy = (
+                        enemy_hero is not None
+                        and tower.get("attack_target") == enemy_hero.get("runtime_id")
+                    )
+                    rs.cur_frame_value = (tower_hp, attacking_enemy)
                 else:
                     rs.cur_frame_value = rs.last_frame_value
             elif reward_name == "hp_point":
                 rs.cur_frame_value = self._hp_ratio(hero)
-            elif reward_name == "ep_rate":
-                rs.cur_frame_value = self._ep_ratio(hero)
             elif reward_name == "kill":
                 rs.cur_frame_value = float(hero.get("kill_cnt", 0)) if hero else 0.0
-            elif reward_name == "death":
-                rs.cur_frame_value = float(hero.get("dead_cnt", 0)) if hero else 0.0
             elif reward_name == "money":
-                rs.cur_frame_value = float(hero.get("money", 0)) / 1000.0 if hero else 0.0
+                rs.cur_frame_value = float(hero.get("money_cnt", 0)) / 1000.0 if hero else 0.0
             elif reward_name == "exp":
-                rs.cur_frame_value = float(hero.get("exp", 0)) / 1000.0 if hero else 0.0
+                rs.cur_frame_value = self._total_exp(hero) / 1000.0
             elif reward_name == "forward":
                 main_hero, main_tower = self._get_camp_units(frame_data, camp)
                 enemy_camp = 2 if camp == 1 else 1
                 _, enemy_tower = self._get_camp_units(frame_data, enemy_camp)
                 rs.cur_frame_value = self.calculate_forward(main_hero, main_tower, enemy_tower)
-            elif reward_name == "last_hit":
-                # 近似：英雄 money_cnt（补刀累计）作累计指标，get_reward 里差分得「最近收益」。
-                rs.cur_frame_value = float(hero.get("money_cnt", 0)) / 100.0 if hero else 0.0
-            # idle_penalty 不在此设置 cur_frame_value（其值在 get_reward 里据 inactive 计数算）
+            # 事件奖励与 idle_penalty 在 get_reward 中直接计算。
 
     def calculate_forward(self, main_hero, main_tower, enemy_tower):
         """英雄沿兵线的站位比例，HP 越高有效权重越大。
@@ -305,6 +324,11 @@ class GameRewardManager:
                 enemy_camp = hero["camp"]
         self.set_cur_calc_frame_vec(self.m_main_calc_frame_map, frame_data, main_camp)
         self.set_cur_calc_frame_vec(self.m_enemy_calc_frame_map, frame_data, enemy_camp)
+        self._last_hit_event, self._monster_event = self._objective_events(
+            frame_data,
+            main_camp,
+            enemy_camp,
+        )
         # 首帧同步 last 到 cur，消除 0→真实值 造成的假增量 spike
         if self._first_frame:
             self._first_frame = False
@@ -323,6 +347,41 @@ class GameRewardManager:
             self._last_pos = self._get_main_hero_pos(frame_data, main_camp)
         # 挂机检测：基于经济/伤害产出（非位置）+ 回撤区豁免
         self._update_inactive(frame_data, main_camp)
+
+    def _objective_events(self, frame_data, main_camp, enemy_camp):
+        """Return main-perspective last-hit and neutral-monster event rewards."""
+        heroes = {
+            hero.get("camp"): hero.get("runtime_id")
+            for hero in frame_data.get("hero_states", [])
+        }
+        main_id = heroes.get(main_camp)
+        enemy_id = heroes.get(enemy_camp)
+        last_hit = 0.0
+        monster = 0.0
+        dead_actions = (
+            (frame_data.get("frame_action") or {}).get("dead_action") or []
+        )
+        for action in dead_actions:
+            death = action.get("death") or {}
+            killer = action.get("killer") or {}
+            killer_id = killer.get("runtime_id")
+            subtype = death.get("sub_type")
+            death_camp = death.get("camp")
+
+            is_soldier = subtype in (MINION_SUBTYPE, "ACTOR_SUB_SOLDIER")
+            if is_soldier:
+                if death_camp == enemy_camp and killer_id == main_id:
+                    last_hit += 1.0
+                elif death_camp == main_camp and killer_id == enemy_id:
+                    last_hit -= 1.0
+                continue
+
+            is_neutral = death_camp in (0, "PLAYERCAMP_MID")
+            if is_neutral and killer_id == main_id:
+                monster += 1.0
+            elif is_neutral and killer_id == enemy_id:
+                monster -= 1.0
+        return last_hit, monster
 
     def _in_retreat_zone(self, frame_data, hero, main_camp):
         """英雄是否在己方塔后方的安全回撤/泉水区（回血/回城）。
@@ -407,26 +466,32 @@ class GameRewardManager:
             main = self.m_main_calc_frame_map[reward_name]
             enemy = self.m_enemy_calc_frame_map[reward_name]
             if reward_name == "tower_hp_point":
-                # 己方塔血量比例（主-敌零和），帧间增量
-                rs.cur_frame_value = main.cur_frame_value - enemy.cur_frame_value
-                rs.last_frame_value = main.last_frame_value - enemy.last_frame_value
-                rs.value = rs.cur_frame_value - rs.last_frame_value
-            elif reward_name == "enemy_tower_hp":
-                # 敌方塔血量下降 = 正向激励：-(敌方塔比例增量)
-                rs.value = -(enemy.cur_frame_value - enemy.last_frame_value)
-            elif reward_name in NON_ZERO_SUM:
-                if reward_name == "forward":
-                    rs.value = main.cur_frame_value
-                elif reward_name == "idle_penalty":
-                    # 产出停滞且不在回撤区的惩罚：宽限期后线性爬升，IDLE_MAX_VALUE 封顶。
-                    if self._inactive_frames > IDLE_GRACE_FRAMES:
-                        rs.value = min(
-                            (self._inactive_frames - IDLE_GRACE_FRAMES) / IDLE_RAMP_FRAMES,
-                            IDLE_MAX_VALUE)
-                    else:
-                        rs.value = 0.0
-                else:  # last_hit: 主视角差分
-                    rs.value = max(0.0, main.cur_frame_value - main.last_frame_value)
+                main_cur_hp, main_attacking_enemy = main.cur_frame_value
+                main_last_hp, _ = main.last_frame_value
+                enemy_cur_hp, enemy_attacking_main = enemy.cur_frame_value
+                enemy_last_hp, _ = enemy.last_frame_value
+                current_advantage = main_cur_hp - enemy_cur_hp
+                last_advantage = main_last_hp - enemy_last_hp
+                rs.value = current_advantage - last_advantage
+                if rs.value > 0 and enemy_attacking_main:
+                    rs.value *= GameConfig.TOWER_DIVE_DISCOUNT
+                elif rs.value < 0 and main_attacking_enemy:
+                    rs.value *= GameConfig.TOWER_DIVE_DISCOUNT
+            elif reward_name == "forward":
+                rs.value = main.cur_frame_value - main.last_frame_value
+            elif reward_name == "last_hit":
+                rs.value = self._last_hit_event
+            elif reward_name == "kill_monster":
+                rs.value = self._monster_event
+            elif reward_name == "idle_penalty":
+                if self._inactive_frames > IDLE_GRACE_FRAMES:
+                    ramp = min(
+                        (self._inactive_frames - IDLE_GRACE_FRAMES) / IDLE_RAMP_FRAMES,
+                        IDLE_MAX_VALUE,
+                    )
+                    rs.value = ramp * GameConfig.IDLE_FRAME_SCALE
+                else:
+                    rs.value = 0.0
             else:
                 # 通用零和子项：主-敌之差的帧间增量
                 rs.cur_frame_value = main.cur_frame_value - enemy.cur_frame_value
@@ -438,3 +503,46 @@ class GameRewardManager:
         reward_sum += self._distance_penalty
         self._distance_penalty = 0.0
         reward_dict["reward_sum"] = reward_sum
+
+    def apply_terminal_outcome(self, reward_dict, frame_data, win=None):
+        """Add a one-shot terminal reward and return its weighted contribution."""
+        if self._terminal_applied:
+            return 0.0
+        self._terminal_applied = True
+
+        outcome = self._terminal_outcome(frame_data, win)
+        bonus = outcome * GameConfig.TERMINAL_WIN_REWARD
+        reward_dict["terminal"] = outcome
+        reward_dict["reward_sum"] = reward_dict.get("reward_sum", 0.0) + bonus
+        return bonus
+
+    def _terminal_outcome(self, frame_data, win):
+        if win == 1:
+            return 1.0
+        if win == 0:
+            return -1.0
+
+        main_camp = self.main_hero_camp
+        if main_camp not in (1, 2):
+            main_hero = next(
+                (hero for hero in frame_data.get("hero_states", [])
+                 if hero.get("runtime_id") == self.main_hero_player_id),
+                None,
+            )
+            main_camp = main_hero.get("camp") if main_hero else -1
+
+        own_alive = False
+        enemy_alive = False
+        for npc in frame_data.get("npc_states", []):
+            if npc.get("sub_type") != TOWER_SUBTYPE:
+                continue
+            alive = npc.get("hp", 0) > 0
+            if npc.get("camp") == main_camp:
+                own_alive = own_alive or alive
+            else:
+                enemy_alive = enemy_alive or alive
+        if own_alive and not enemy_alive:
+            return 1.0
+        if enemy_alive and not own_alive:
+            return -1.0
+        return 0.0

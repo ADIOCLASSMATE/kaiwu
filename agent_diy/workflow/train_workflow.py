@@ -217,7 +217,7 @@ class EpisodeRunner:
             self.logger.info(f"Episode {self.episode_cnt} start, usr_conf is {usr_conf}")
 
             # ---- 监控统计累加器（仅追踪 monitor_side，按局聚合）----
-            # reward 子项累计（简化版 8 子项，无 distance shaping / idle）
+            # reward 子项累计
             reward_item_sum = {}          # 各 reward 子项的整局累计值
 
             # Reward initialization
@@ -286,6 +286,21 @@ class EpisodeRunner:
                 # 正常结束或超时退出，运行train_test时会提前退出
                 is_gameover = terminated or truncated or (is_train_test and frame_no >= 1000)
                 if is_gameover:
+                    # 终局奖励必须写入最后一帧样本，且不参与 shaping 的时间衰减。
+                    for i, (do_sample, agent) in enumerate(zip(self.do_samples, self.agents)):
+                        if not do_sample:
+                            continue
+                        terminal_bonus = agent.reward_manager.apply_terminal_outcome(
+                            observation[str(i)]["reward"],
+                            observation[str(i)]["frame_state"],
+                            observation[str(i)].get("win"),
+                        )
+                        reward_sum_list[i] += terminal_bonus
+                        if i == monitor_side:
+                            reward_item_sum["terminal"] = (
+                                reward_item_sum.get("terminal", 0.0)
+                                + observation[str(i)]["reward"]["terminal"]
+                            )
                     self.logger.info(
                         f"episode_{self.episode_cnt} terminated in fno_{frame_no}, truncated:{truncated}, eval:{is_eval}, reward_sum:{reward_sum_list[monitor_side]}"
                     )

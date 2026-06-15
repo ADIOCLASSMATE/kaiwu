@@ -58,24 +58,22 @@ def _build_token_slices(token_segments):
 
 
 class GameConfig:
-    # 各奖励子项权重，在 reward_manager 中使用（11 子项稠密奖励）。
+    # 目标优先的 9 项 shaping reward。终局胜负奖励单独配置，避免被时间衰减。
     REWARD_WEIGHT_DICT = {
-        "tower_hp_point": 5.0,      # 推塔（判定胜负的外塔 sub_type=21），零和
-        "enemy_tower_hp": 4.0,      # 敌方外塔血量下降的正向激励，零和
-        "hp_point": 2.0,            # 自身血量比例，零和
-        "ep_rate": 0.5,             # 法力/能量比例，零和
-        "kill": 1.0,                # 击杀数差，零和
-        "death": -1.0,              # 死亡数差（权重为负，越少越好），零和
-        "money": 0.6,               # 经济差，零和
-        "exp": 0.6,                 # 经验差，零和
-        "forward": 0.05,            # 向敌方塔站位（HP 越高权重越大），非零和
-        "last_hit": 0.4,            # 补刀收益差分（降权防刷线不推塔），非零和
-        # 挂机惩罚：长时间零产出 *且* 不在回撤/泉水区时才罚。权重为负，非零和。
-        "idle_penalty": -0.15,
+        "tower_hp_point": 8.0,      # 双方外塔血量优势变化，越塔换血时折价
+        "hp_point": 1.5,            # sqrt(血量比例)优势变化，低血区更敏感
+        "kill": 2.5,                # 击杀数优势变化；不再与 death 重复计数
+        "money": 0.4,               # 累计经济 money_cnt 优势变化
+        "exp": 0.4,                 # 跨等级累计经验优势变化
+        "last_hit": 0.25,           # dead_action 中英雄真实补刀事件
+        "kill_monster": 0.3,        # dead_action 中中立野怪归属
+        "forward": 0.05,            # 安全前压势函数的帧间增量
+        "idle_penalty": -0.1,       # 长时间停滞后的渐进式每帧惩罚
     }
-    # 时间衰减：reward *= 0.6^(frame_no/TIME_SCALE_ARG)，末期约 ×0.13。
-    # 制造终局压力——越早获胜收益越大，拖到 timeout 所有 reward 几乎归零。
-    TIME_SCALE_ARG = 5000
+    TERMINAL_WIN_REWARD = 12.0
+    TOWER_DIVE_DISCOUNT = 0.25
+    # 终局奖励已经提供结束压力；关闭全局时间衰减，保持 shaping 尺度稳定。
+    TIME_SCALE_ARG = 0
     MODEL_SAVE_INTERVAL = 1800
 
     # ---- 越程攻击惩罚（distance shaping，与 action 相关，独立于上面的帧差子项）----
@@ -88,6 +86,7 @@ class GameConfig:
     IDLE_GRACE_FRAMES = 150          # 宽限期（帧，~5s）：赶路/等 CD/补刀间隙不罚
     IDLE_RAMP_FRAMES = 600           # 爬升期（帧，~20s）：从 0 线性到满额惩罚
     IDLE_MAX_VALUE = 1.0             # idle_penalty value 封顶：防累积成巨额负悬崖
+    IDLE_FRAME_SCALE = 1.0 / 30.0    # 满额时约每秒 -0.1，而不是每帧 -0.1
     # 回撤/泉水豁免：英雄到敌方外塔的距离 > (己方外塔到敌方外塔距离 × 此比例) 时，
     # 视为在己方塔后方安全区（回血/回城/泉水），冻结挂机计数。1.0=己方塔位置，
     # >1.0 表示更靠后。设为 1.05 给己方塔身前一点余量仍算"在场"。
