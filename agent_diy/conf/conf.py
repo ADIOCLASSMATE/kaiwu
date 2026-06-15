@@ -59,8 +59,16 @@ def _build_token_slices(token_segments):
 
 class GameConfig:
     # 目标优先的 9 项 shaping reward。终局胜负奖励单独配置，避免被时间衰减。
+    #
+    # v0_43→当前调整（仅一处，最小改动、保留与 v0_43 的可比性）：
+    #   tower_hp_point 8.0 → 2.0。依据 entropy_per_head 监控：button 头停在低位
+    #   不再下降、move 头几乎不动、只有 target 头在学。推塔是低频大事件，权重 8.0
+    #   会让其 advantage spike 在反传时主导 button 头的梯度方向，把对线期高频的
+    #   last_hit/hp_point 信号在数值上淹没。压到 2.0（与 kill 同量级）让高频对线
+    #   信号在 button 头的 advantage 里占比回升，预期 button 头熵恢复下降。
+    #   其余 8 项权重不变，保持已验证能学的状态。
     REWARD_WEIGHT_DICT = {
-        "tower_hp_point": 8.0,      # 双方外塔血量优势变化，越塔换血时折价
+        "tower_hp_point": 2.0,      # 双方外塔血量优势变化，越塔换血时折价（v0_43: 8.0）
         "hp_point": 1.5,            # sqrt(血量比例)优势变化，低血区更敏感
         "kill": 2.5,                # 击杀数优势变化；不再与 death 重复计数
         "money": 0.4,               # 累计经济 money_cnt 优势变化
@@ -350,6 +358,11 @@ class Config:
     N_REGISTER = 2          # register token 数量（学习式池化）
     GLOBAL_PROJ_DIM = 64     # 全局特征投影维度
 
+    # AdaLN gate 初始值。0 = 原始 AdaLN-Zero（block 初始恒等，实体信息被 gate 掉，
+    # 训练早期策略头看不见单位）。小正数让 attention/mlp 残差从第一步就以小幅度
+    # 流入，给策略梯度一条通路。0.1 是稳健起点；若想更接近原行为可设 0.05。
+    ADALN_GATE_INIT = 0.1
+
     # 输出头配置：label/value 头的中间隐层维度列表（不含输入和最后一层）
     # 空列表 = 输入直连输出；[256] = 一层 256 隐层（旧行为）
     LABEL_HEAD_HIDDEN_DIMS = []     # [] = 直连，[256] = 恢复旧行为
@@ -380,7 +393,10 @@ class Config:
     INIT_LEARNING_RATE_START = 1e-3
     TARGET_LR = 1e-4
     TARGET_STEP = 5000
-    BETA_START = 0.025
+    # 诊断结论：原值 0.025 在弱 advantage 下让 entropy bonus（≈0.30）远大于
+    # policy_cost（≈0.007），把策略死死摁在合法-均匀分布上、熵不下降。降到
+    # 0.005 让策略梯度能把熵拉开。确认能学之后可再回调平衡探索。
+    BETA_START = 0.005
     LOG_EPSILON = 1e-6
 
     IS_REINFORCE_TASK_LIST = [True, True, True, True, True, True]

@@ -101,8 +101,20 @@ class AdaLNBlock(nn.Module):
             nn.GELU(),
             make_fc_layer(ffn_dim, d_model),
         )
-        # [γ1, β1, gate1, γ2, β2, gate2]，逐 condition 一行，0 初始化（AdaLN-Zero）
-        self.mod_table = nn.Parameter(torch.zeros(n_cond, 6 * d_model))
+        # [γ1, β1, gate1, γ2, β2, gate2]，逐 condition 一行。
+        # 诊断结论：纯 AdaLN-Zero（全 0）会让 block 初始为恒等，attention/mlp
+        # 输出被 gate 成 0，实体信息在训练早期完全流不到 register 池化与 pointer
+        # 头 → 策略头"看不见"场上单位 → 策略梯度近零、熵不降。
+        # 修法：γ(scale)/β(shift) 仍 0 初始化（LayerNorm 调制起点中性、稳定），
+        # 但把两个 gate 列初始化成小正数 GATE_INIT，让实体信息从第一步就以小幅度
+        # 流入，给梯度一条通路。GATE_INIT=0 即退化回原 AdaLN-Zero。
+        mod = torch.zeros(n_cond, 6 * d_model)
+        gate_init = float(Config.ADALN_GATE_INIT)
+        if gate_init != 0.0:
+            # 列布局：[g1 | b1 | gate1 | g2 | b2 | gate2]，每段宽 d_model
+            mod[:, 2 * d_model:3 * d_model] = gate_init   # gate1（attention 残差）
+            mod[:, 5 * d_model:6 * d_model] = gate_init   # gate2（mlp 残差）
+        self.mod_table = nn.Parameter(mod)
 
     def forward(self, x, cond_idx, key_padding_mask):
         # x: (B, S, D); cond_idx: (S,) long; key_padding_mask: (B, S) bool, True=屏蔽

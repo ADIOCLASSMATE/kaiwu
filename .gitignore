@@ -13,3 +13,5 @@ script/*.log
 script/*.pid
 script/bootstrap-proxy-server.remote.sh
 *cache
+code-hok1v1-IDE-64.3.1
+logs

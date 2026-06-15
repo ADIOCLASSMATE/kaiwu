@@ -192,6 +192,7 @@ def build_monitor():
         ("entropy_loss", "熵损失", "0.01"),
         ("grad_norm", "梯度范数", "0.0001"),
         ("learning_rate", "学习率", "0.00000001"),
+        ("is_train_rate", "有效样本占比", "0.0001"),
     ]
     builder = builder.add_group(group_name="训练指标", group_name_en="training")
     for en, cn, prec in train_items:

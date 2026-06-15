@@ -240,3 +240,18 @@ class FrameCollector:
 
     def __len__(self):
         return max([len(agent_samples) for agent_samples in self.rl_data_map])
+
+    def is_train_rate(self, agent_id):
+        """该 agent 本局采样帧中 is_train=1 的占比（监控用，纯观测）。
+
+        诊断 suspect C：PPO 的 policy/entropy 损失分母是 sum(weight*is_train)。
+        若该占比偏低（英雄频繁死亡 / action[0]<0 的无效帧多），有效策略梯度样本
+        就少，advantage 归一化也会被小分母放大噪声。这条曲线让该假设可证伪：
+        若 >0.5，则样本有效性不是主因，AdaLN gate + entropy 系数足够解释停滞。
+        """
+        frames = self.rl_data_map[agent_id]
+        if not frames:
+            return 0.0
+        total = len(frames)
+        trained = sum(1 for rl in frames.values() if getattr(rl, "is_train", 0))
+        return trained / total

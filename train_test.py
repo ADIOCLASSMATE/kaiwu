@@ -32,8 +32,8 @@ if __name__ == "__main__":
             "dump_model_freq": "1000",
             "model_file_sync_per_minutes": "1",
             "modelpool_max_save_model_count": "1",
-            "preload_model": "False",
-            "preload_model_dir": "{agent_name}/ckpt",
-            "preload_model_id": "1000",
+            "preload_model": "True",
+            "preload_model_dir": "agent_diy/ckpt",
+            "preload_model_id": "8840",
         },
     )

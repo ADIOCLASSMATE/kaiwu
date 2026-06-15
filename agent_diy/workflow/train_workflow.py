@@ -333,6 +333,13 @@ class EpisodeRunner:
                             feat_stats = self.agents[monitor_side].get_feature_stats()
                             monitor_data.update(feat_stats)
 
+                            # 样本有效性：本局 is_train=1 占比（诊断策略梯度被掩码
+                            # 削弱的程度；偏低说明无效帧太多）。仅训练对局有意义。
+                            if not is_eval and self.do_samples[monitor_side]:
+                                monitor_data["is_train_rate"] = round(
+                                    frame_collector.is_train_rate(monitor_side), 4
+                                )
+
                             self.monitor.put_data({os.getpid(): monitor_data})
                             self.last_report_monitor_time = now
 
