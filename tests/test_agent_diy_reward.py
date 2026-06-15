@@ -3,6 +3,7 @@ import unittest
 
 from agent_diy.conf.conf import GameConfig
 from agent_diy.feature.reward_process import GameRewardManager
+from tests.feature_test_utils import load_obs
 
 
 MAIN_ID = 101
@@ -113,6 +114,15 @@ class RewardDesignTests(unittest.TestCase):
         for name in GameConfig.REWARD_WEIGHT_DICT:
             self.assertAlmostEqual(reward[name], 0.0)
 
+    def test_missing_towers_on_first_observation_are_safe(self):
+        frame = make_frame()
+        frame["npc_states"] = []
+
+        reward = self.manager.result(frame)
+
+        self.assertEqual(reward["tower_hp_point"], 0.0)
+        self.assertTrue(all(value == value for value in reward.values()))
+
     def test_purchase_does_not_create_negative_money_reward(self):
         initial = make_frame(
             main=make_hero(MAIN_ID, 1, money=1000, money_cnt=1200, x=-10000),
@@ -201,6 +211,14 @@ class RewardDesignTests(unittest.TestCase):
 
         self.assertEqual(reward["last_hit"], -1.0)
         self.assertEqual(reward["kill_monster"], -1.0)
+
+    def test_real_probe_dead_action_is_attributed_to_the_enemy(self):
+        observation = load_obs("episode_03/frame_01874.json")
+        manager = GameRewardManager(observation["player_id"])
+
+        reward = manager.result(observation["frame_state"])
+
+        self.assertEqual(reward["last_hit"], -1.0)
 
     def test_forward_reward_is_progress_delta_not_position_income(self):
         initial = make_frame(
