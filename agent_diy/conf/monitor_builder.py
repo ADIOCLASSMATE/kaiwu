@@ -120,7 +120,7 @@ def build_monitor():
         ("rwd_kill", "击杀"),
         ("rwd_money", "累计经济优势"),
         ("rwd_exp", "累计经验优势"),
-        ("rwd_forward", "前压进展"),
+        ("rwd_retreat_penalty", "高血龟缩惩罚"),
         ("rwd_last_hit", "英雄补刀"),
         ("rwd_kill_monster", "野怪控制"),
         ("rwd_idle_penalty", "挂机惩罚"),

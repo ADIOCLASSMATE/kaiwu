@@ -11,7 +11,7 @@ Author: Tencent AI Arena Authors
 零和子项（主-敌之差的帧间增量）：
   tower_hp_point, hp_point, kill, money, exp
 非零和子项（仅主视角）：
-  forward（安全前压势函数的帧间增量）、
+  retreat_penalty（仅惩罚高血量时退到己方塔后）、
   last_hit / kill_monster（dead_action 事件归因）、
   idle_penalty（挂机惩罚：经济/伤害产出停滞且不在回撤/泉水区时累计，权重为负）
 
@@ -268,54 +268,46 @@ class GameRewardManager:
                 rs.cur_frame_value = float(hero.get("money_cnt", 0)) / 1000.0 if hero else 0.0
             elif reward_name == "exp":
                 rs.cur_frame_value = self._total_exp(hero) / 1000.0
-            elif reward_name == "forward":
+            elif reward_name == "retreat_penalty":
                 main_hero, main_tower = self._get_camp_units(frame_data, camp)
                 enemy_camp = 2 if camp == 1 else 1
                 _, enemy_tower = self._get_camp_units(frame_data, enemy_camp)
-                rs.cur_frame_value = self.calculate_forward(main_hero, main_tower, enemy_tower)
+                rs.cur_frame_value = self.calculate_retreat_penalty(
+                    main_hero,
+                    main_tower,
+                    enemy_tower,
+                )
             # 事件奖励与 idle_penalty 在 get_reward 中直接计算。
 
-    def calculate_forward(self, main_hero, main_tower, enemy_tower):
-        """英雄沿兵线的站位比例，HP 越高有效权重越大。
-
-        forward_raw ∈ [-0.2, 1.0]：0=在己方塔位，1=在敌方塔位。
-        乘以 hp_ratio：满血时鼓励前压，残血时自然减弱（撤退合理）。
-        反 hack：若处于敌方外塔攻击范围内，则不给前压奖励——否则满血贴脸敌塔
-        反复横跳即可零风险白嫖该奖励。
-        """
+    def calculate_retreat_penalty(self, main_hero, main_tower, enemy_tower):
+        """Return normalized turtling severity without rewarding forward motion."""
         if main_hero is None or main_tower is None or enemy_tower is None:
             return 0.0
-        if abs(main_hero["location"]["x"]) >= SENTINEL:
+        if self._is_sentinel(main_hero.get("location", {})):
             return 0.0
 
         hero_pos = (main_hero["location"]["x"], main_hero["location"]["z"])
         own_pos = (main_tower["location"]["x"], main_tower["location"]["z"])
         enemy_pos = (enemy_tower["location"]["x"], enemy_tower["location"]["z"])
 
-        # 反 hack：在敌方外塔攻击范围内不发前压奖励
-        if GameConfig.FORWARD_NO_REWARD_IN_ENEMY_TOWER:
-            etr = float(enemy_tower.get("attack_range", 0) or 0)
-            if etr > 0 and math.dist(hero_pos, enemy_pos) <= etr:
-                return 0.0
-
-        dist_hero_to_enemy = math.dist(hero_pos, enemy_pos)
-        dist_own_to_enemy = math.dist(own_pos, enemy_pos)
-        if dist_own_to_enemy <= 0:
-            return 0.0
-
-        # 0 = 贴着己方塔，1 = 贴着敌方塔
-        forward_raw = 1.0 - dist_hero_to_enemy / dist_own_to_enemy
-        # 轻量 clip：防止缩在泉水时产生极端负值
-        if forward_raw < -0.2:
-            forward_raw = -0.2
-        if forward_raw > 1.0:
-            forward_raw = 1.0
-
         hp = main_hero.get("hp", 0)
         max_hp = main_hero.get("max_hp", 1) or 1
         hp_ratio = max(0.0, min(1.0, hp / max_hp))
+        if hp_ratio < GameConfig.RETREAT_HP_THRESHOLD:
+            return 0.0
 
-        return forward_raw * hp_ratio
+        tower_distance = math.dist(own_pos, enemy_pos)
+        if tower_distance <= 0:
+            return 0.0
+        hero_to_enemy = math.dist(hero_pos, enemy_pos)
+        distance_behind_tower = hero_to_enemy - tower_distance
+        if distance_behind_tower <= 0:
+            return 0.0
+
+        scale = tower_distance * GameConfig.RETREAT_MAX_DISTANCE_RATIO
+        if scale <= 0:
+            return 0.0
+        return min(distance_behind_tower / scale, 1.0)
 
     def frame_data_process(self, frame_data):
         main_camp, enemy_camp = -1, -1
@@ -480,8 +472,8 @@ class GameRewardManager:
                     rs.value *= GameConfig.TOWER_DIVE_DISCOUNT
                 elif rs.value < 0 and main_attacking_enemy:
                     rs.value *= GameConfig.TOWER_DIVE_DISCOUNT
-            elif reward_name == "forward":
-                rs.value = main.cur_frame_value - main.last_frame_value
+            elif reward_name == "retreat_penalty":
+                rs.value = main.cur_frame_value
             elif reward_name == "last_hit":
                 rs.value = self._last_hit_event
             elif reward_name == "kill_monster":

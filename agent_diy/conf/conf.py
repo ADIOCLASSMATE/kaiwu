@@ -67,7 +67,7 @@ class GameConfig:
         "exp": 0.4,                 # 跨等级累计经验优势变化
         "last_hit": 0.25,           # dead_action 中英雄真实补刀事件
         "kill_monster": 0.3,        # dead_action 中中立野怪归属
-        "forward": 0.05,            # 安全前压势函数的帧间增量
+        "retreat_penalty": -0.05,   # 高血量退到己方塔后的龟缩惩罚
         "idle_penalty": -0.1,       # 长时间停滞后的渐进式每帧惩罚
     }
     TERMINAL_WIN_REWARD = 12.0
@@ -77,7 +77,7 @@ class GameConfig:
     MODEL_SAVE_INTERVAL = 1800
 
     # ---- 越程攻击惩罚（distance shaping，与 action 相关，独立于上面的帧差子项）----
-    OUT_OF_RANGE_PENALTY = 0.01      # 量级 ~ forward(0.05) 的 1/5；设 0 关闭
+    OUT_OF_RANGE_PENALTY = 0.01      # 轻量动作惩罚；设 0 关闭
     ATTACK_BUTTONS = (3, 4, 5, 6, 8, 10, 11)
 
     # ---- 挂机检测参数（纯产出停滞判据）----
@@ -95,8 +95,8 @@ class GameConfig:
     # 地图尺度 MAP_SCALE=46000，英雄移速 ~350，每帧(~1/30s)位移约 12 单位。
     # 设 30 约需 2-3 帧连续移动才能重置；过滤掉贴墙卡住的微小抖动。
     IDLE_POS_DELTA_THRESHOLD = 30
-    # forward 反 hack：处于敌方外塔攻击范围内时不发前压奖励。
-    FORWARD_NO_REWARD_IN_ENEMY_TOWER = True
+    RETREAT_HP_THRESHOLD = 0.8       # 低于该血量时后撤视为合理，不惩罚
+    RETREAT_MAX_DISTANCE_RATIO = 0.2 # 最多按塔间距 20% 归一，限制单帧尺度
 
 
 class FeatureConfig:
