@@ -99,7 +99,7 @@ class RewardDesignTests(unittest.TestCase):
                 "exp",
                 "last_hit",
                 "kill_monster",
-                "forward",
+                "retreat_penalty",
                 "idle_penalty",
             },
         )
@@ -222,23 +222,26 @@ class RewardDesignTests(unittest.TestCase):
 
         self.assertEqual(reward["last_hit"], -1.0)
 
-    def test_forward_reward_is_progress_delta_not_position_income(self):
-        initial = make_frame(
-            main=make_hero(MAIN_ID, 1, x=-15000),
+    def test_retreat_penalty_only_targets_high_hp_turtling(self):
+        behind_tower = make_frame(
+            main=make_hero(MAIN_ID, 1, hp=1000, x=-18000),
         )
-        advanced = make_frame(
+        normal_lane = make_frame(
             frame_no=1,
-            main=make_hero(MAIN_ID, 1, x=-5000),
+            main=make_hero(MAIN_ID, 1, hp=1000, x=-5000),
         )
-        stationary = copy.deepcopy(advanced)
-        stationary["frame_no"] = 2
+        low_hp_retreat = make_frame(
+            frame_no=2,
+            main=make_hero(MAIN_ID, 1, hp=300, x=-18000),
+        )
 
-        self.manager.result(initial)
-        advance_reward = self.manager.result(advanced)
-        stationary_reward = self.manager.result(stationary)
+        turtling_reward = self.manager.result(behind_tower)
+        lane_reward = self.manager.result(normal_lane)
+        retreat_reward = self.manager.result(low_hp_retreat)
 
-        self.assertGreater(advance_reward["forward"], 0.0)
-        self.assertAlmostEqual(stationary_reward["forward"], 0.0)
+        self.assertGreater(turtling_reward["retreat_penalty"], 0.0)
+        self.assertEqual(lane_reward["retreat_penalty"], 0.0)
+        self.assertEqual(retreat_reward["retreat_penalty"], 0.0)
 
     def test_tower_damage_is_discounted_when_diving(self):
         initial = make_frame()
