@@ -347,14 +347,14 @@ class FeatureConfig:
 # 模型与算法相关配置
 class Config:
     NETWORK_NAME = "network"
-    LSTM_TIME_STEPS = 16
+    LSTM_TIME_STEPS = 8
     LSTM_UNIT_SIZE = 256
 
     # ---- entity-transformer 编码器超参（model 读取）----
-    EMBED_DIM = 128          # token 嵌入维度 d_model
+    EMBED_DIM = 192          # token 嵌入维度 d_model
     N_HEADS = 4              # 注意力头数
-    N_LAYERS = 2            # encoder 层数
-    FFN_MULT = 2            # FFN 隐层 = FFN_MULT * EMBED_DIM
+    N_LAYERS = 3            # encoder 层数
+    FFN_MULT = 4            # FFN 隐层 = FFN_MULT * EMBED_DIM
     N_REGISTER = 2          # register token 数量（学习式池化）
     GLOBAL_PROJ_DIM = 64     # 全局特征投影维度
 
@@ -367,7 +367,7 @@ class Config:
     # 空列表 = 输入直连输出；[256] = 一层 256 隐层（旧行为）
     LABEL_HEAD_HIDDEN_DIMS = []     # [] = 直连，[256] = 恢复旧行为
     VALUE_HEAD_HIDDEN_DIMS = []
-    ACTOR_ADAPTER_DIM = 32
+    ACTOR_ADAPTER_DIM = 64
 
     # 特征 / 合法动作维度（派生自 FeatureConfig）
     FEATURE_DIM = FeatureConfig.FEATURE_DIM

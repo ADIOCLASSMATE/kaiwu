@@ -97,7 +97,7 @@ Use the local Kaiwu session token from `~/.kaiwu/session.json`; do not use the W
 Fetch all raw logs for a task by name and save JSONL:
 
 ```bash
-node ../kaiwu-others/kaiwu-cli/bin/kaiwu.js log \
+node kaiwu-cli/bin/kaiwu.js log \
   --domain-type course \
   --domain-id 2383 \
   --experiment-id 15823 \
@@ -109,7 +109,7 @@ node ../kaiwu-others/kaiwu-cli/bin/kaiwu.js log \
 Filter to errors:
 
 ```bash
-node ../kaiwu-others/kaiwu-cli/bin/kaiwu.js log \
+node kaiwu-cli/bin/kaiwu.js log \
   --domain-type course \
   --domain-id 2383 \
   --experiment-id 15823 \
@@ -122,14 +122,14 @@ node ../kaiwu-others/kaiwu-cli/bin/kaiwu.js log \
 List available log levels/modules:
 
 ```bash
-node ../kaiwu-others/kaiwu-cli/bin/kaiwu.js log --domain-type course --domain-id 2383 --experiment-id 15823 --name train-diy-v0_0 --query var_level
-node ../kaiwu-others/kaiwu-cli/bin/kaiwu.js log --domain-type course --domain-id 2383 --experiment-id 15823 --name train-diy-v0_0 --query var_module
+node kaiwu-cli/bin/kaiwu.js log --domain-type course --domain-id 2383 --experiment-id 15823 --name train-diy-v0_0 --query var_level
+node kaiwu-cli/bin/kaiwu.js log --domain-type course --domain-id 2383 --experiment-id 15823 --name train-diy-v0_0 --query var_module
 ```
 
 Get 15-second log counts:
 
 ```bash
-node ../kaiwu-others/kaiwu-cli/bin/kaiwu.js log \
+node kaiwu-cli/bin/kaiwu.js log \
   --domain-type course \
   --domain-id 2383 \
   --experiment-id 15823 \

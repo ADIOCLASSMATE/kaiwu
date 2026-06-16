@@ -54,7 +54,7 @@ def make_fc_layer(in_features: int, out_features: int, use_bias=True):
 
 class MLP(nn.Module):
     def __init__(self, fc_feat_dim_list: List[int], name: str,
-                 non_linearity: nn.Module = nn.ReLU, non_linearity_last: bool = False):
+                 non_linearity: nn.Module = nn.GELU, non_linearity_last: bool = False):
         super(MLP, self).__init__()
         self.fc_layers = nn.Sequential()
         for i in range(len(fc_feat_dim_list) - 1):

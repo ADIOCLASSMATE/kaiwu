@@ -5,7 +5,7 @@ This project cannot run kaiwudrl locally. Kaiwu WebIDE containers in this
 course block general outbound network access, so remote control uses the
 platform WebIDE port proxy:
 
-- ../kaiwu-others/kaiwu-cli for platform API operations.
+- kaiwu-cli/ for platform API operations (login, log fetching).
 - script/proxy_env_server.py, which runs inside WebIDE on 127.0.0.1:8765.
 - https://tencentarena.com/p5/ide/<experiment_id>/proxy/8765/ for local access.
 """
@@ -28,7 +28,7 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-KAIWU_CLI = (ROOT / "../kaiwu-others/kaiwu-cli/bin/kaiwu.js").resolve()
+KAIWU_CLI = (ROOT / "kaiwu-cli/bin/kaiwu.js").resolve()
 ENV_FILE = ROOT / ".kaiwu-remote.env"
 PASSWORD_FILE = ROOT / "password.txt"
 PROXY_SERVER_PORT = 8765

@@ -37,10 +37,10 @@ eval_opponent_type = "common_ai"
 # hero_id, Type: integer, options: 112: Luban No.7, 133: Di Renjie, 199: Arli
 # 英雄ID, 类型整数, 可选 112: 鲁班七号, 133: 狄仁杰, 199: 公孙离
 hero_id = 112
-# [[lineups.blue_camp]]
-# hero_id = 133
-# [[lineups.blue_camp]]
-# hero_id = 199
+[[lineups.blue_camp]]
+hero_id = 133
+[[lineups.blue_camp]]
+hero_id = 199
 
 # Red camp lineup configuration
 # 红方阵容配置
@@ -48,7 +48,7 @@ hero_id = 112
 # hero_id, Type: integer, options: 112: Luban No.7, 133: Di Renjie, 199: Arli
 # 英雄ID, 类型整数, 可选 112: 鲁班七号, 133: 狄仁杰, 199: 公孙离
 hero_id = 112
-# [[lineups.red_camp]]
-# hero_id = 133
-# [[lineups.red_camp]]
-# hero_id = 199
+[[lineups.red_camp]]
+hero_id = 133
+[[lineups.red_camp]]
+hero_id = 199
