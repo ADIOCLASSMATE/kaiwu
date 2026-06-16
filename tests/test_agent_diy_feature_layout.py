@@ -95,6 +95,15 @@ class FeatureLayoutTests(unittest.TestCase):
                 self.assertEqual(len(feature), FC.FEATURE_DIM)
                 self.assertTrue(all(math.isfinite(value) for value in feature))
 
+    def test_all_probe_features_are_unit_scaled(self):
+        for path, observation in iter_probe_observations():
+            with self.subTest(path=path):
+                feature = FeatureBuilder(observation["camp"]).build(
+                    observation["frame_state"]
+                )
+                self.assertGreaterEqual(min(feature), 0.0)
+                self.assertLessEqual(max(feature), 1.0)
+
     def test_feature_process_stats_include_new_token_group(self):
         observation = load_obs("episode_03/frame_01874.json")
         process = FeatureProcess(observation["camp"])

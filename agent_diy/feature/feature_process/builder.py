@@ -23,8 +23,9 @@ FeatureBuilder（v2）：构造 FEATURE_DIM 维特征向量。
 last-seen 记忆作为实例状态保存（不会跨局污染）。仅在「当前可观测」时更新记忆，
 保证 last-known 信息全部来自本方过去的真实观测。
 
-比率和位置特征主要落在 [0, 1]；重尾数值使用 log(1+x) 压缩，可能大于 1，
-随后由模型输入 LayerNorm 统一尺度。
+所有输入特征都约束到 [0, 1]。天然比率直接使用 ratio，战斗属性使用固定
+scale01，经济/价格/血量/收益等重尾正数使用 log01。这样模型输入不依赖
+token-level LayerNorm 也能保持尺度稳定。
 """
 
 import math
@@ -40,14 +41,24 @@ from agent_diy.feature.targeting import (
 )
 
 
-def _log_compress(value):
-    """log(1+x) 压缩重尾特征，结果 ∈ [0,+∞)，后续由模型侧 LayerNorm 统一尺度。"""
+def _scale01(value, scale):
     if value is None:
+        return 0.0
+    if scale <= 0:
+        return 0.0
+    return _clip01(float(value) / scale)
+
+
+def _log01(value, scale):
+    """log(1+x) 压缩重尾正数，再按固定上界映射到 [0,1]。"""
+    if value is None:
+        return 0.0
+    if scale <= 0:
         return 0.0
     v = float(value)
     if v <= 0.0:
         return 0.0
-    return math.log(1.0 + v)
+    return _clip01(math.log1p(v) / math.log1p(scale))
 
 
 def _clip01(v):
@@ -303,25 +314,25 @@ class FeatureBuilder:
         # 以下全部为动态战斗/成长属性：雾中不可知 → 0
         if observable:
             f.append(_clip01(hero.get("level", 1) / 15.0))
-            f.append(_log_compress(hero.get("money", 0)))
-            f.append(_log_compress(hero.get("exp", 0)))
-            f.append(_log_compress(hero.get("phy_atk", 0)))
-            f.append(_log_compress(hero.get("phy_def", 0)))
-            f.append(_log_compress(hero.get("mgc_atk", 0)))
-            f.append(_log_compress(hero.get("mgc_def", 0)))
-            f.append(_log_compress(hero.get("mov_spd", 0)))
-            f.append(_log_compress(hero.get("atk_spd", 0)))
-            f.append(_clip01(hero.get("crit_rate", 0) / 10000.0))
-            f.append(_clip01(hero.get("crit_effe", 0) / 10000.0))
-            f.append(_clip01(hero.get("phy_vamp", 0) / 10000.0))
-            f.append(_clip01(hero.get("mgc_vamp", 0) / FC.MGC_VAMP_SCALE))
-            f.append(_log_compress(hero.get("hp_recover", 0)))
-            f.append(_log_compress(hero.get("ep_recover", 0)))
-            f.append(_log_compress(hero.get("phy_armor_hurt", 0)))
-            f.append(_log_compress(hero.get("mgc_armor_hurt", 0)))
-            f.append(_clip01(hero.get("cd_reduce", 0) / FC.CD_REDUCE_SCALE))
-            f.append(_clip01(hero.get("ctrl_reduce", 0) / FC.CTRL_REDUCE_SCALE))
-            f.append(_log_compress(hero.get("sight_area", 0)))
+            f.append(_log01(hero.get("money", 0), FC.HERO_MONEY_LOG_SCALE))
+            f.append(_log01(hero.get("exp", 0), FC.HERO_EXP_LOG_SCALE))
+            f.append(_scale01(hero.get("phy_atk", 0), FC.HERO_PHY_ATK_SCALE))
+            f.append(_scale01(hero.get("phy_def", 0), FC.HERO_PHY_DEF_SCALE))
+            f.append(_scale01(hero.get("mgc_atk", 0), FC.HERO_MGC_ATK_SCALE))
+            f.append(_scale01(hero.get("mgc_def", 0), FC.HERO_MGC_DEF_SCALE))
+            f.append(_scale01(hero.get("mov_spd", 0), FC.HERO_MOV_SPD_SCALE))
+            f.append(_scale01(hero.get("atk_spd", 0), FC.HERO_ATK_SPD_SCALE))
+            f.append(_scale01(hero.get("crit_rate", 0), FC.CRIT_RATE_SCALE))
+            f.append(_scale01(hero.get("crit_effe", 0), FC.CRIT_EFFE_SCALE))
+            f.append(_scale01(hero.get("phy_vamp", 0), FC.PHY_VAMP_SCALE))
+            f.append(_scale01(hero.get("mgc_vamp", 0), FC.MGC_VAMP_SCALE))
+            f.append(_scale01(hero.get("hp_recover", 0), FC.HERO_HP_RECOVER_SCALE))
+            f.append(_scale01(hero.get("ep_recover", 0), FC.HERO_EP_RECOVER_SCALE))
+            f.append(_scale01(hero.get("phy_armor_hurt", 0), FC.HERO_PHY_ARMOR_HURT_SCALE))
+            f.append(_scale01(hero.get("mgc_armor_hurt", 0), FC.HERO_MGC_ARMOR_HURT_SCALE))
+            f.append(_scale01(hero.get("cd_reduce", 0), FC.CD_REDUCE_SCALE))
+            f.append(_scale01(hero.get("ctrl_reduce", 0), FC.CTRL_REDUCE_SCALE))
+            f.append(_scale01(hero.get("sight_area", 0), FC.HERO_SIGHT_AREA_SCALE))
             f.append(1.0 if hero.get("is_in_grass", False) else 0.0)
             f += self._skill_feature(hero)
             f += self._hero_private_feature(hero)
@@ -412,7 +423,7 @@ class FeatureBuilder:
                 eq = equips[i]
                 has = 1.0 if eq.get("configId", 0) != 0 else 0.0
                 out.append(has)
-                out.append(_log_compress(eq.get("buyPrice", 0)))
+                out.append(_log01(eq.get("buyPrice", 0), FC.EQUIP_BUY_PRICE_LOG_SCALE))
                 out.append(1.0 if eq.get("active_skill") else 0.0)
                 out.append(1.0 if eq.get("passive_skill") else 0.0)
             else:
@@ -498,7 +509,7 @@ class FeatureBuilder:
         f += self._pos_block(use_pos)
         # attack_range_soft(1)（塔的攻击范围是配置常量，可视为已知）
         atk_range = float(npc.get("attack_range", 0) or 0)
-        f.append(_log_compress(atk_range))
+        f.append(_scale01(atk_range, FC.TOWER_ATTACK_RANGE_SCALE))
         # main_in_range(1)（动态：需要当前位置）
         in_range = 0.0
         d = self._dist_to_main(use_pos) if use_pos is not None else None
@@ -545,7 +556,7 @@ class FeatureBuilder:
         f.append(1.0)  # exists
         max_hp = m.get("max_hp", 0) or 1
         f.append(_clip01(m.get("hp", 0) / max_hp))
-        f.append(_log_compress(m.get("hp", 0)))
+        f.append(_log01(m.get("hp", 0), FC.MINION_HP_LOG_SCALE))
         if self._main_pos is not None:
             f.append(_rel_to01(pos[0] - self._main_pos[0], FC.ENGAGE_SCALE))
             f.append(_rel_to01(pos[1] - self._main_pos[1], FC.ENGAGE_SCALE))
@@ -553,7 +564,7 @@ class FeatureBuilder:
             f += [0.5, 0.5]
         f.append(_clip01(d / FC.DIST_SCALE) if d is not None else 0.0)
         f.append(self._in_main_atk_range(pos))
-        f.append(_log_compress(m.get("kill_income", 0)))
+        f.append(_log01(m.get("kill_income", 0), FC.UNIT_KILL_INCOME_LOG_SCALE))
         f += self._attack_target_feature(m)
         f += self._arli_mark_feature(m)
         f += self._minion_type_feature(m)
@@ -605,7 +616,7 @@ class FeatureBuilder:
         f.append(1.0)  # exists
         max_hp = m.get("max_hp", 0) or 1
         f.append(_clip01(m.get("hp", 0) / max_hp))
-        f.append(_log_compress(m.get("hp", 0)))
+        f.append(_log01(m.get("hp", 0), FC.MONSTER_HP_LOG_SCALE))
         if self._main_pos is not None:
             f.append(_rel_to01(pos[0] - self._main_pos[0], FC.ENGAGE_SCALE))
             f.append(_rel_to01(pos[1] - self._main_pos[1], FC.ENGAGE_SCALE))
@@ -613,7 +624,7 @@ class FeatureBuilder:
             f += [0.5, 0.5]
         f.append(_clip01(d / FC.DIST_SCALE) if d is not None else 0.0)
         f.append(self._in_main_atk_range(pos))
-        f.append(_log_compress(m.get("kill_income", 0)))
+        f.append(_log01(m.get("kill_income", 0), FC.UNIT_KILL_INCOME_LOG_SCALE))
         return f
 
     # ---- hero bullet tokens ----

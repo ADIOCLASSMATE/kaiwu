@@ -186,9 +186,9 @@ class Model(nn.Module):
             pk: make_fc_layer(in_dim, self.embed_dim) for pk, in_dim in proj_in.items()
         })
 
-        # ---- 输入 LayerNorm：log 压缩后的特征经 LN 统一尺度再投影 ----
+        # ---- 输入归一化：特征工程已按字段语义约束到 [0,1] ----
         self.input_norm = ModuleDict({
-            pk: nn.LayerNorm(in_dim, elementwise_affine=True)
+            pk: nn.Identity()
             for pk, in_dim in proj_in.items()
         })
 

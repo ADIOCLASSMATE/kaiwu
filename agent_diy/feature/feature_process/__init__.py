@@ -22,8 +22,8 @@ FeatureProcess: 把环境 observation 转成 FeatureConfig.FEATURE_DIM 维特征
     使 camp1 / camp2 的输出对称。
   - 哨兵处理：|x|>=SENTINEL 或 |z|>=SENTINEL 的当前可见 NPC 不入槽；
     英雄/塔保留 last-known 位置特征。NPC 还要判 camp_visible[main_camp-1]。
-  - 数值经 log(1+x)、比率或固定尺度归一；log 特征可大于 1，模型侧 LayerNorm
-    负责统一输入尺度。
+  - 数值经 log01、比率或固定尺度归一；所有特征约束到 [0, 1]，不依赖
+    模型侧 token-level LayerNorm 统一尺度。
   - 相对位移用 ENGAGE_SCALE 后 clip 到 [-1,1] 再线性映射到 [0,1]；
     绝对位置用 MAP_SCALE；整体距离用 DIST_SCALE。
   - Soldier1-4 target 槽：敌方小兵先选最近 4 个，再按 runtime_id 升序入槽。

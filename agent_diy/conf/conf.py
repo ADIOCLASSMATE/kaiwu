@@ -100,7 +100,7 @@ class GameConfig:
     #   己方神符到中线只保留极弱线性引导；
     #   中线及以后为 0。仅满血启用，避免惩罚合理回撤。
     LANE_GUIDANCE_HP_THRESHOLD = 0.99
-    LANE_GUIDANCE_EPSILON = 0.04
+    LANE_GUIDANCE_EPSILON = 0.02
     LANE_GUIDANCE_BACK_EXPONENT = 4.0
     LANE_GUIDANCE_FOUNTAIN_T = -0.25
     LANE_GUIDANCE_FALLBACK_CAKE_T = -0.08
@@ -196,10 +196,36 @@ class FeatureConfig:
     EQUIP_DIM = EQUIP_SLOTS * EQUIP_FEAT_PER_SLOT  # = 24
 
     # ---- 各实体 token 维度 ----
-    # 英雄战斗属性归一化尺度（仅保留天然比率用到的 scale）
-    MGC_VAMP_SCALE = 10000.0       # 万分比，同 crit_rate/phy_vamp
-    CD_REDUCE_SCALE = 10000.0      # 万分比
-    CTRL_REDUCE_SCALE = 10000.0    # 万分比
+    # 连续特征归一化尺度。来源优先级：
+    #   1) ../kaiwu-others/data/field_inventory.csv 的 12000 帧实测范围；
+    #   2) ../kaiwu-others/code/agent_ppo/feature/feature_process/*_config.ini；
+    #   3) 字段本身的万分比语义。
+    # builder 侧会用 scale01/log01 把连续值压到 [0, 1]，从而允许模型输入
+    # 不再依赖 token-level LayerNorm。
+    HERO_MONEY_LOG_SCALE = 4000.0
+    HERO_EXP_LOG_SCALE = 2202.0
+    HERO_PHY_ATK_SCALE = 900.0
+    HERO_PHY_DEF_SCALE = 1200.0
+    HERO_MGC_ATK_SCALE = 1200.0
+    HERO_MGC_DEF_SCALE = 700.0
+    HERO_MOV_SPD_SCALE = 7000.0
+    HERO_ATK_SPD_SCALE = 10000.0
+    HERO_HP_RECOVER_SCALE = 220.0
+    HERO_EP_RECOVER_SCALE = 70.0
+    HERO_PHY_ARMOR_HURT_SCALE = 240.0
+    HERO_MGC_ARMOR_HURT_SCALE = 170.0
+    HERO_SIGHT_AREA_SCALE = 10000.0
+    CRIT_RATE_SCALE = 10000.0
+    CRIT_EFFE_SCALE = 17000.0
+    PHY_VAMP_SCALE = 10000.0
+    MGC_VAMP_SCALE = 10000.0
+    CD_REDUCE_SCALE = 3600.0
+    CTRL_REDUCE_SCALE = 3500.0
+    EQUIP_BUY_PRICE_LOG_SCALE = 2500.0
+    TOWER_ATTACK_RANGE_SCALE = 13000.0
+    MINION_HP_LOG_SCALE = 12000.0
+    MONSTER_HP_LOG_SCALE = 9000.0
+    UNIT_KILL_INCOME_LOG_SCALE = 250.0
 
     HERO_FIELDS = (
         ("status", HERO_STATUS_DIM),
