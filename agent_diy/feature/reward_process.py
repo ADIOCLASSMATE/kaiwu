@@ -16,6 +16,7 @@ Author: Tencent AI Arena Authors
   death（自身死亡增量）、
   minion_hp_point（可见敌方英雄攻击己方小兵造成的掉血惩罚）、
   last_hit / kill_monster（dead_action 事件归因）、
+  tower_attack（安全压塔窗口中选择点塔动作的小奖励）、
   idle_penalty（挂机惩罚：经济/伤害产出停滞且不在回撤/泉水区时累计，权重为负）
 
 判定胜负的塔 = 外塔 sub_type=21（reward 按它跟踪）。二塔(24)/水晶(23) 不参与。
@@ -100,6 +101,7 @@ class GameRewardManager:
         self._idle_triggered_cnt = 0
         self._last_hit_event = 0.0
         self._monster_event = 0.0
+        self._tower_attack_event = 0.0
         self._terminal_applied = False
         self._lane_cake_anchor_by_camp = {}
 
@@ -156,6 +158,65 @@ class GameRewardManager:
         if self._distance_penalty < 0:
             self._out_of_range_cnt += 1
             self._out_of_range_sum += self._distance_penalty
+        self._tower_attack_event = self.tower_attack_reward(
+            action,
+            decided_frame_state,
+        )
+
+    def tower_attack_reward(self, action, decided_frame_state):
+        """Return 1.0 for a safe, in-range tower attack choice; else 0.0."""
+        if action is None or len(action) < 6:
+            return 0.0
+        button, target = action[0], action[5]
+        if button not in GameConfig.ATTACK_BUTTONS or target != 7:
+            return 0.0
+
+        main_hero = self._main_hero(decided_frame_state)
+        if (
+            main_hero is None
+            or main_hero.get("hp", 0) <= 0
+            or self._is_sentinel(main_hero.get("location", {}))
+        ):
+            return 0.0
+        main_camp = main_hero.get("camp")
+        if main_camp not in (1, 2):
+            return 0.0
+
+        enemy_camp = 2 if main_camp == 1 else 1
+        enemy_hero, enemy_tower = self._get_camp_units(decided_frame_state, enemy_camp)
+        if (
+            enemy_tower is None
+            or enemy_tower.get("hp", 0) <= 0
+            or not visible_to_camp(enemy_tower, main_camp)
+            or self._is_sentinel(enemy_tower.get("location", {}))
+        ):
+            return 0.0
+
+        hero_pos = (
+            main_hero["location"]["x"],
+            main_hero["location"]["z"],
+        )
+        tower_loc = enemy_tower["location"]
+        tower_pos = (tower_loc["x"], tower_loc["z"])
+        attack_range = float(main_hero.get("attack_range", 0) or 0)
+        if attack_range <= 0 or math.dist(hero_pos, tower_pos) > attack_range:
+            return 0.0
+        if enemy_tower.get("attack_target") == main_hero.get("runtime_id"):
+            return 0.0
+        if not self._has_minion_pressure_on_enemy_tower(
+            decided_frame_state,
+            main_camp,
+        ):
+            return 0.0
+        if self.calculate_danger_penalty(
+            decided_frame_state,
+            main_hero,
+            enemy_hero,
+            enemy_tower,
+            main_camp,
+        ) > 0:
+            return 0.0
+        return 1.0
 
     def consume_monitor_stats(self):
         """Return per-episode reward health stats and reset their counters."""
@@ -755,6 +816,8 @@ class GameRewardManager:
                 )
             elif reward_name == "kill_monster":
                 rs.value = self._monster_event
+            elif reward_name == "tower_attack":
+                rs.value = self._tower_attack_event
             elif reward_name == "idle_penalty":
                 if self._inactive_frames > IDLE_GRACE_FRAMES:
                     ramp = min(
@@ -774,6 +837,7 @@ class GameRewardManager:
         reward_dict["distance_penalty"] = self._distance_penalty
         reward_sum += self._distance_penalty
         self._distance_penalty = 0.0
+        self._tower_attack_event = 0.0
         reward_dict["reward_sum"] = reward_sum
         self._reward_frame_cnt += 1
         if reward_dict.get("idle_penalty", 0.0) > 0:

@@ -145,6 +145,7 @@ def build_monitor():
         ("rwd_minion_hp_point", "己方兵线保护"),
         ("rwd_kill_monster", "野怪控制"),
         ("rwd_idle_penalty", "挂机惩罚"),
+        ("rwd_tower_attack", "安全点塔"),
         ("rwd_distance_penalty", "越程惩罚"),
         ("rwd_terminal", "终局结果"),
     ]

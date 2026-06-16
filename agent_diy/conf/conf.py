@@ -77,6 +77,7 @@ class GameConfig:
         "minion_hp_point": 0.1,     # 敌方英雄攻击己方兵的小惩罚；不奖励无脑清线
         "kill_monster": 0.3,        # dead_action 中中立野怪归属
         "idle_penalty": -0.1,       # 长时间停滞后的渐进式每帧惩罚
+        "tower_attack": 0.02,       # 安全压塔时选择点塔动作的小奖励
     }
     TERMINAL_WIN_REWARD = 8.0
     TOWER_DIVE_DISCOUNT = 0.25
