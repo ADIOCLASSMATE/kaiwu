@@ -26,6 +26,7 @@ from agent_diy.conf.conf import Config, FeatureConfig
 from agent_diy.feature.reward_process import GameRewardManager
 from agent_diy.algorithm.algorithm import Algorithm
 from agent_diy.feature.feature_process import FeatureProcess
+from agent_diy.diagnostics import AgentDiagnostics
 
 
 SUMMONER_SKILL_MAP = {
@@ -70,7 +71,16 @@ class Agent(BaseAgent):
         self.reward_manager = None
         self.logger = logger
         self.monitor = monitor
-        self.algorithm = Algorithm(self.model, self.optimizer, self.scheduler, self.device, self.logger, self.monitor)
+        self.diagnostics = AgentDiagnostics.from_env()
+        self.algorithm = Algorithm(
+            self.model,
+            self.optimizer,
+            self.scheduler,
+            self.device,
+            self.logger,
+            self.monitor,
+            diagnostics=self.diagnostics,
+        )
 
         super().__init__(agent_type, device, logger, monitor)
 
@@ -124,6 +134,15 @@ class Agent(BaseAgent):
         list_act_data = []
         for i in range(len(legal_action)):
             prob, d_prob, action, d_action = self._sample_masked_action(logits[i], legal_action[i])
+            self.diagnostics.record_policy(
+                logits=logits[i],
+                legal_action=legal_action[i],
+                prob=prob,
+                d_prob=d_prob,
+                action=action,
+                d_action=d_action,
+                value=value[i] if len(value) > i else value,
+            )
             list_act_data.append(ActData(
                 action=action, d_action=d_action, prob=prob, d_prob=d_prob,
                 value=value, lstm_cell=_lstm_cell[i], lstm_hidden=_lstm_hidden[i]))
@@ -144,6 +163,7 @@ class Agent(BaseAgent):
     def observation_process(self, observation):
         # 特征处理；legal_action 传给推理的是原始 184 维（契约 A）
         feature = self.feature_processes.process_feature(observation)
+        self.diagnostics.record_feature(feature)
         return ObsData(
             feature=feature,
             legal_action=observation["legal_action"],
@@ -162,6 +182,14 @@ class Agent(BaseAgent):
     def save_model(self, path=None, id="1"):
         model_file_path = f"{path}/model.ckpt-{str(id)}.pkl"
         torch.save(self.model.state_dict(), model_file_path)
+        self.diagnostics.save_checkpoint(
+            f"{path}/model.ckpt-{str(id)}",
+            extra_meta={
+                "model_id": str(id),
+                "train_step": self.algorithm.train_step,
+                "param_count": sum(p.numel() for p in self.model.parameters()),
+            },
+        )
         self.logger.info(f"save model {model_file_path} successfully")
 
     def load_model(self, path=None, id="1"):
@@ -185,6 +213,31 @@ class Agent(BaseAgent):
     def get_feature_stats(self):
         """返回整局特征健康度聚合指标，调用后内部累加器归零。"""
         return self.feature_processes.get_stats()
+
+    def record_episode_step(self, episode, frame_no, observation, action, is_eval=False):
+        if not self.diagnostics.enabled:
+            return
+        act_data = self.act_data
+        head_entropy = []
+        try:
+            probs = np.array(act_data.prob).reshape(-1)
+            offset = 0
+            for size in self.label_size_list:
+                p = probs[offset:offset + size]
+                head_entropy.append(float(-np.sum(p * np.log(np.maximum(p, 1e-12)))))
+                offset += size
+        except Exception:
+            head_entropy = []
+        self.diagnostics.record_episode_step(
+            episode=episode,
+            frame_no=frame_no,
+            observation=observation,
+            action=action,
+            d_action=act_data.d_action,
+            head_entropy=head_entropy,
+            value=act_data.value,
+            is_eval=is_eval,
+        )
 
     # ---- 以下采样契约函数原样保留（不得改动语义）----
     def _sample_masked_action(self, logits, legal_action):

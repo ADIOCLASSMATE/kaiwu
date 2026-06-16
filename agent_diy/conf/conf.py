@@ -424,6 +424,14 @@ class Config:
     USE_GRAD_CLIP = True
     GRAD_CLIP_RANGE = 0.5
 
+    # ---- checkpoint diagnostics ----
+    # 环境变量 KAIWU_DIAG_* 优先；如果提交 job 时不方便设置环境变量，可直接改这里。
+    DIAG_ENABLE = False
+    DIAG_FRAME_STRIDE = 30
+    DIAG_EPISODE_INTERVAL = 20
+    DIAG_MAX_RECORDS = 2000
+    DIAG_SAMPLE_VALUES = 20000
+
     SAMPLE_DIM = sum(DATA_SPLIT_SHAPE[:-2]) * LSTM_TIME_STEPS + sum(DATA_SPLIT_SHAPE[-2:])
 
 

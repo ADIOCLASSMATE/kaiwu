@@ -241,6 +241,13 @@ class EpisodeRunner:
                             actions[index] = agent.predict(observation[str(index)])
                         else:
                             actions[index] = agent.exploit(observation[str(index)])
+                        agent.record_episode_step(
+                            episode=self.episode_cnt,
+                            frame_no=frame_no,
+                            observation=observation[str(index)],
+                            action=actions[index],
+                            is_eval=is_eval,
+                        )
 
                         # Only sample when do_sample=True and is_eval=False
                         # 评估对局数据不采样，不是训练中最新模型产生的数据不采样

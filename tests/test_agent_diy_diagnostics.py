@@ -19,7 +19,7 @@ class AgentDiyDiagnosticsTests(unittest.TestCase):
         return AgentDiagnostics(config=config)
 
     def test_checkpoint_save_writes_structured_files_without_matplotlib(self):
-        diag = self._diagnostics(frame_stride=1, max_episode_records=8)
+        diag = self._diagnostics(frame_stride=1, episode_interval=1, max_episode_records=8)
 
         feature = np.zeros(FC.FEATURE_DIM, dtype=np.float32)
         feature[FC.TOKEN_SLICES["main_hero"][0].start] = 1.0

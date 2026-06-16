@@ -16,7 +16,7 @@ from agent_diy.conf.conf import Config
 
 
 class Algorithm:
-    def __init__(self, model, optimizer, scheduler, device=None, logger=None, monitor=None):
+    def __init__(self, model, optimizer, scheduler, device=None, logger=None, monitor=None, diagnostics=None):
         self.device = device
         self.model = model
         self.optimizer = optimizer
@@ -25,6 +25,7 @@ class Algorithm:
         self.train_step = 0
         self.logger = logger
         self.monitor = monitor
+        self.diagnostics = diagnostics
 
         self.cut_points = [value[0] for value in Config.data_shapes]
         self.data_split_shape = Config.DATA_SPLIT_SHAPE
@@ -104,6 +105,23 @@ class Algorithm:
             if self.monitor:
                 self.monitor.put_data({os.getpid(): results})
             self.last_report_monitor_time = now
+        if self.diagnostics is not None and self.diagnostics.enabled:
+            _, (value_loss, policy_loss, entropy_loss) = _info_list
+            diag_metrics = {
+                "total_loss": results["total_loss"],
+                "value_loss": value_loss,
+                "policy_loss": policy_loss,
+                "entropy_loss": entropy_loss,
+                "grad_norm": raw_grad_norm,
+                "learning_rate": self.optimizer.param_groups[0]["lr"],
+            }
+            self.diagnostics.record_train_step(
+                diag_metrics,
+                reward=data_list[1],
+                advantage=data_list[2],
+                value=rst_list[-1],
+                grad_norms=self._compute_module_grad_norms(),
+            )
         return results
 
     def _compute_grad_norm(self):
@@ -112,3 +130,12 @@ class Algorithm:
             if p.grad is not None:
                 total_norm += p.grad.data.norm(2).item() ** 2
         return total_norm ** 0.5
+
+    def _compute_module_grad_norms(self):
+        groups = {}
+        for name, param in self.model.named_parameters():
+            if param.grad is None:
+                continue
+            group = name.split(".", 1)[0]
+            groups[group] = groups.get(group, 0.0) + param.grad.data.norm(2).item() ** 2
+        return {key: value ** 0.5 for key, value in groups.items()}
