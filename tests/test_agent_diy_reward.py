@@ -107,6 +107,7 @@ class RewardDesignTests(unittest.TestCase):
             set(GameConfig.REWARD_WEIGHT_DICT),
             {
                 "tower_hp_point",
+                "lane_progress",
                 "hp_point",
                 "danger_penalty",
                 "kill",

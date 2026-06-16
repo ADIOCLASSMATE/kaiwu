@@ -11,6 +11,7 @@ Author: Tencent AI Arena Authors
 零和子项（主-敌之差的帧间增量）：
   tower_hp_point, hp_point, kill, money, exp
 非零和子项（仅主视角）：
+  lane_progress（从己方塔/泉水走到中线的势函数，中线后封顶）、
   danger_penalty（低血仍处在敌方威胁区）、
   retreat_penalty（仅惩罚高血量时退到己方塔后）、
   last_hit / kill_monster（dead_action 事件归因）、
@@ -269,6 +270,15 @@ class GameRewardManager:
                     if not isinstance(previous, tuple):
                         previous = (0.0, False)
                     rs.cur_frame_value = previous
+            elif reward_name == "lane_progress":
+                main_hero, main_tower = self._get_camp_units(frame_data, camp)
+                enemy_camp = 2 if camp == 1 else 1
+                _, enemy_tower = self._get_camp_units(frame_data, enemy_camp)
+                rs.cur_frame_value = self.calculate_lane_progress_potential(
+                    main_hero,
+                    main_tower,
+                    enemy_tower,
+                )
             elif reward_name == "hp_point":
                 rs.cur_frame_value = self._hp_ratio(hero)
             elif reward_name == "danger_penalty":
@@ -326,6 +336,30 @@ class GameRewardManager:
         if scale <= 0:
             return 0.0
         return min(distance_behind_tower / scale, 1.0)
+
+    def calculate_lane_progress_potential(self, main_hero, main_tower, enemy_tower):
+        """Return [0, 1] progress from own tower toward lane center.
+
+        The potential saturates at the midpoint between outer towers. This gives
+        credit for leaving base and entering lane, without rewarding tower dives
+        or running past the useful laning area.
+        """
+        if main_hero is None or main_tower is None or enemy_tower is None:
+            return 0.0
+        if self._is_sentinel(main_hero.get("location", {})):
+            return 0.0
+
+        hero_pos = (main_hero["location"]["x"], main_hero["location"]["z"])
+        own_pos = (main_tower["location"]["x"], main_tower["location"]["z"])
+        enemy_pos = (enemy_tower["location"]["x"], enemy_tower["location"]["z"])
+
+        tower_distance = math.dist(own_pos, enemy_pos)
+        if tower_distance <= 0:
+            return 0.0
+
+        hero_to_enemy = math.dist(hero_pos, enemy_pos)
+        progress = (tower_distance - hero_to_enemy) / (tower_distance * 0.5)
+        return max(0.0, min(1.0, progress))
 
     def calculate_danger_penalty(
         self,
@@ -576,6 +610,12 @@ class GameRewardManager:
                         rs.value *= GameConfig.TOWER_NO_MINION_DISCOUNT
                 elif rs.value < 0 and main_attacking_enemy:
                     rs.value *= GameConfig.TOWER_DIVE_DISCOUNT
+            elif reward_name == "lane_progress":
+                rs.value = main.cur_frame_value - main.last_frame_value
+                if rs.value < 0:
+                    main_hero, _ = self._get_camp_units(frame_data, self.main_hero_camp)
+                    if self._raw_hp_ratio(main_hero) < GameConfig.RETREAT_HP_THRESHOLD:
+                        rs.value = 0.0
             elif reward_name == "danger_penalty":
                 rs.value = main.cur_frame_value
             elif reward_name == "retreat_penalty":

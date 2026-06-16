@@ -19,7 +19,7 @@ auto_switch_monitor_side = true
 # 1. selfplay：自对弈
 # 2. common_ai：与基于规则的common_ai对战
 # 3. 自定义的模型id：与指定的模型对战，需要先将模型上传至模型管理，并且将模型ID配置在kaiwu.json中，然后在此处进行引用
-opponent_agent = "common_ai"
+opponent_agent = "selfplay"
 
 # Evaluation interval (unit: games). Type: integer, value range: integer >= 2, default: 10
 # 评估间隔(单位局)，类型整型，取值范围为大于等于2的整数，默认值10
@@ -30,6 +30,18 @@ eval_interval = 10
 # 评估对手类型，类型字符串，取值范围为[selfplay, common_ai, 自定义模型id]
 # 值的含义请参考opponent_agent注释
 eval_opponent_type = "common_ai"
+
+# Training-only opponent mixture. Evaluation still follows eval_opponent_type.
+# 训练局专用对手混合；评估局仍使用 eval_opponent_type。
+# selfplay: use this task's own model history ("random" checkpoint when training)
+# common_ai: use built-in rule AI
+# model_pool: randomly choose one model id from kaiwu.json.model_pool; skipped if empty
+# 权重只看相对比例；例如 0.5/0.3/0.2 表示约 50%/30%/20%。
+[episode.train_opponent_mix]
+enable = true
+selfplay = 0.4
+common_ai = 0.6
+model_pool = 0.0
 
 # Blue camp lineup configuration
 # 蓝方阵容配置

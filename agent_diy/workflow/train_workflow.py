@@ -11,6 +11,7 @@ Author: Tencent AI Arena Authors
 import os
 import time
 import random
+import tomllib
 from agent_diy.feature.definition import (
     sample_process,
     build_frame,
@@ -25,6 +26,9 @@ from tools.metrics_utils import get_training_metrics
 from common_python.utils.workflow_disaster_recovery import handle_disaster_recovery
 
 
+TRAIN_ENV_CONFIG_PATH = "agent_diy/conf/train_env_conf.toml"
+
+
 def workflow(envs, agents, logger=None, monitor=None, *args, **kwargs):
     # Whether the agent is training, corresponding to do_predicts
     # 智能体是否进行训练
@@ -34,7 +38,7 @@ def workflow(envs, agents, logger=None, monitor=None, *args, **kwargs):
     # Create environment configuration manager instance
     # 创建对局配置管理器实例
     env_conf_manager = EnvConfManager(
-        config_path="agent_diy/conf/train_env_conf.toml",
+        config_path=TRAIN_ENV_CONFIG_PATH,
         logger=logger,
     )
 
@@ -81,6 +85,62 @@ class EpisodeRunner:
         self.agent_num = len(agents)
         self.episode_cnt = 0
         self.last_report_monitor_time = 0
+        self.train_opponent_mix = self._load_train_opponent_mix(TRAIN_ENV_CONFIG_PATH)
+
+    def _load_train_opponent_mix(self, config_path):
+        default = {
+            "enable": False,
+            "selfplay": 1.0,
+            "common_ai": 0.0,
+            "model_pool": 0.0,
+        }
+        try:
+            with open(config_path, "rb") as f:
+                data = tomllib.load(f)
+        except (OSError, tomllib.TOMLDecodeError) as exc:
+            self.logger.info(f"failed to load train opponent mix config: {exc}; disabled")
+            return default
+
+        mix = data.get("episode", {}).get("train_opponent_mix", {})
+        if not mix:
+            return default
+
+        cfg = {
+            "enable": bool(mix.get("enable", default["enable"])),
+            "selfplay": max(0.0, float(mix.get("selfplay", default["selfplay"]))),
+            "common_ai": max(0.0, float(mix.get("common_ai", default["common_ai"]))),
+            "model_pool": max(0.0, float(mix.get("model_pool", default["model_pool"]))),
+        }
+        if cfg["selfplay"] + cfg["common_ai"] + cfg["model_pool"] <= 0:
+            cfg["enable"] = False
+        self.logger.info(f"train opponent mix config: {cfg}")
+        return cfg
+
+    def _select_train_opponent_agent(self, configured_opponent_agent, is_eval, is_train_test):
+        if is_eval or is_train_test or not self.train_opponent_mix.get("enable", False):
+            return configured_opponent_agent
+
+        choices = []
+        weights = []
+        if self.train_opponent_mix.get("selfplay", 0.0) > 0:
+            choices.append("selfplay")
+            weights.append(self.train_opponent_mix["selfplay"])
+        if self.train_opponent_mix.get("common_ai", 0.0) > 0:
+            choices.append("common_ai")
+            weights.append(self.train_opponent_mix["common_ai"])
+        if self.train_opponent_mix.get("model_pool", 0.0) > 0:
+            candidate_models = get_valid_model_pool(self.logger)
+            if candidate_models:
+                choices.append(str(random.choice(candidate_models)))
+                weights.append(self.train_opponent_mix["model_pool"])
+            else:
+                self.logger.info("train opponent mix skips model_pool because kaiwu.json model_pool is empty")
+
+        if not choices:
+            return configured_opponent_agent
+        selected = random.choices(choices, weights=weights, k=1)[0]
+        self.logger.info(f"train opponent selected: {selected}")
+        return selected
 
     def _call_init_config(self, usr_conf):
         """Call init_config on both agents to get summoner skill selections,
@@ -202,7 +262,7 @@ class EpisodeRunner:
 
             # Reset agents
             # 重置智能体
-            self.reset_agents(observation)
+            self.reset_agents(observation, is_eval=is_eval)
 
             # Reset environment frame collector
             # 重置环境帧收集器
@@ -357,10 +417,15 @@ class EpisodeRunner:
                         yield list_agents_samples
                     break
 
-    def reset_agents(self, observation):
-        opponent_agent = self.env_conf_manager.get_opponent_agent()
+    def reset_agents(self, observation, is_eval=False):
+        configured_opponent_agent = self.env_conf_manager.get_opponent_agent()
         monitor_side = self.env_conf_manager.get_monitor_side()
         is_train_test = os.environ.get("is_train_test", "False").lower() == "true"
+        opponent_agent = self._select_train_opponent_agent(
+            configured_opponent_agent,
+            is_eval,
+            is_train_test,
+        )
 
         # The 'do_predicts' specifies which agents are to perform model predictions.
         # do_predicts 指定哪些智能体要进行模型预测
@@ -387,7 +452,11 @@ class EpisodeRunner:
                 elif opponent_agent == "selfplay":
                     # Training model, "latest" - latest model, "random" - random model from the model pool
                     # 加载训练过的模型，可以选择最新模型，也可以选择随机模型 "latest" - 最新模型, "random" - 模型池中随机模型
-                    agent.load_model(id="latest")
+                    opponent_model_id = "latest" if is_eval or is_train_test else "random"
+                    self.logger.info(
+                        f"selfplay opponent loads model_id={opponent_model_id}, eval={is_eval}"
+                    )
+                    agent.load_model(id=opponent_model_id)
                 else:
                     # Opponent model, model_id is checked from kaiwu.json
                     # 选择kaiwu.json中设置的对手模型, model_id 即 opponent_agent，必须设置正确否则报错

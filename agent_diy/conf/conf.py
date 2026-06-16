@@ -66,6 +66,7 @@ class GameConfig:
     #   3. 死亡规避不能只等 dead_cnt 发生后才反馈，低血处在威胁区时给轻量逐帧惩罚。
     REWARD_WEIGHT_DICT = {
         "tower_hp_point": 2.0,      # 双方外塔血量优势变化，越塔/无兵线推塔时折价
+        "lane_progress": 0.6,       # 从己方塔/泉水走到中线的势函数奖励，中线后封顶
         "hp_point": 1.5,            # sqrt(血量比例)优势变化，低血区更敏感
         "danger_penalty": -0.5,     # 低血仍在敌英雄/敌塔威胁区的逐帧惩罚
         "kill": 2.5,                # 击杀数优势变化；不再与 death 重复计数
@@ -427,7 +428,7 @@ class Config:
     LAMDA = 0.95
 
     USE_GRAD_CLIP = True
-    GRAD_CLIP_RANGE = 0.5
+    GRAD_CLIP_RANGE = 1.0
 
     # ---- checkpoint diagnostics ----
     # 环境变量 KAIWU_DIAG_* 优先；如果提交 job 时不方便设置环境变量，可直接改这里。
