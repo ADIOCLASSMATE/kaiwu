@@ -24,7 +24,9 @@ def make_hero(
     money_cnt=0,
     kill_cnt=0,
     dead_cnt=0,
+    total_hurt_to_hero=0,
     attack_range=5000,
+    attack_target=0,
     x=0,
     z=0,
 ):
@@ -41,8 +43,9 @@ def make_hero(
         "money_cnt": money_cnt,
         "kill_cnt": kill_cnt,
         "dead_cnt": dead_cnt,
-        "total_hurt_to_hero": 0,
+        "total_hurt_to_hero": total_hurt_to_hero,
         "attack_range": attack_range,
+        "attack_target": attack_target,
         "location": {"x": x, "z": z},
     }
 
@@ -123,9 +126,11 @@ class RewardDesignTests(unittest.TestCase):
                 "hp_point",
                 "danger_penalty",
                 "kill",
+                "death",
                 "money",
                 "exp",
                 "last_hit",
+                "minion_hp_point",
                 "kill_monster",
                 "idle_penalty",
             },
@@ -134,6 +139,14 @@ class RewardDesignTests(unittest.TestCase):
         self.assertGreater(
             GameConfig.TERMINAL_WIN_REWARD,
             GameConfig.REWARD_WEIGHT_DICT["tower_hp_point"],
+        )
+        self.assertLess(
+            GameConfig.REWARD_WEIGHT_DICT["minion_hp_point"],
+            GameConfig.REWARD_WEIGHT_DICT["last_hit"],
+        )
+        self.assertLess(
+            GameConfig.REWARD_WEIGHT_DICT["minion_hp_point"],
+            GameConfig.REWARD_WEIGHT_DICT["hp_point"],
         )
 
     def test_first_frame_has_no_artificial_shaping_reward(self):
@@ -242,6 +255,166 @@ class RewardDesignTests(unittest.TestCase):
 
         self.assertEqual(reward["last_hit"], -1.0)
         self.assertEqual(reward["kill_monster"], -1.0)
+
+    def test_hp_point_uses_only_hero_damage_attribution(self):
+        initial = make_frame(
+            main=make_hero(MAIN_ID, 1, hp=1000, total_hurt_to_hero=0),
+            enemy=make_hero(ENEMY_ID, 2, hp=1000, total_hurt_to_hero=0),
+        )
+        non_hero_damage = make_frame(
+            frame_no=1,
+            main=make_hero(MAIN_ID, 1, hp=1000, total_hurt_to_hero=0),
+            enemy=make_hero(ENEMY_ID, 2, hp=500, total_hurt_to_hero=0),
+        )
+        hero_damage = make_frame(
+            frame_no=2,
+            main=make_hero(MAIN_ID, 1, hp=1000, total_hurt_to_hero=300),
+            enemy=make_hero(ENEMY_ID, 2, hp=500, total_hurt_to_hero=0),
+        )
+        enemy_trade = make_frame(
+            frame_no=3,
+            main=make_hero(MAIN_ID, 1, hp=800, total_hurt_to_hero=300),
+            enemy=make_hero(ENEMY_ID, 2, hp=500, total_hurt_to_hero=150),
+        )
+
+        self.manager.result(initial)
+        non_hero_reward = self.manager.result(non_hero_damage)
+        hero_reward = self.manager.result(hero_damage)
+        trade_reward = self.manager.result(enemy_trade)
+
+        self.assertEqual(non_hero_reward["hp_point"], 0.0)
+        self.assertAlmostEqual(
+            hero_reward["hp_point"],
+            300 / GameConfig.HERO_DAMAGE_REWARD_SCALE,
+        )
+        self.assertAlmostEqual(
+            trade_reward["hp_point"],
+            -150 / GameConfig.HERO_DAMAGE_REWARD_SCALE,
+        )
+
+    def test_death_penalty_tracks_only_main_hero_deaths(self):
+        initial = make_frame(
+            main=make_hero(MAIN_ID, 1, dead_cnt=0),
+            enemy=make_hero(ENEMY_ID, 2, dead_cnt=0),
+        )
+        main_dead = make_frame(
+            frame_no=1,
+            main=make_hero(MAIN_ID, 1, dead_cnt=1),
+            enemy=make_hero(ENEMY_ID, 2, dead_cnt=0),
+        )
+        enemy_dead = make_frame(
+            frame_no=2,
+            main=make_hero(MAIN_ID, 1, dead_cnt=1),
+            enemy=make_hero(ENEMY_ID, 2, dead_cnt=1),
+        )
+
+        self.manager.result(initial)
+        death_reward = self.manager.result(main_dead)
+        enemy_death_reward = self.manager.result(enemy_dead)
+
+        self.assertEqual(death_reward["death"], 1.0)
+        self.assertLess(
+            death_reward["death"] * GameConfig.REWARD_WEIGHT_DICT["death"],
+            0.0,
+        )
+        self.assertEqual(enemy_death_reward["death"], 0.0)
+
+    def test_tower_suicide_still_receives_death_penalty(self):
+        initial = make_frame(
+            main=make_hero(MAIN_ID, 1, dead_cnt=0, x=14500),
+            enemy=make_hero(ENEMY_ID, 2, dead_cnt=0, x=9000),
+            enemy_tower=make_tower(2, attack_target=MAIN_ID, x=15000),
+        )
+        tower_death = make_frame(
+            frame_no=1,
+            main=make_hero(MAIN_ID, 1, dead_cnt=1, hp=0, x=14500),
+            enemy=make_hero(ENEMY_ID, 2, dead_cnt=0, x=9000),
+            enemy_tower=make_tower(2, attack_target=MAIN_ID, x=15000),
+        )
+
+        self.manager.result(initial)
+        reward = self.manager.result(tower_death)
+
+        self.assertEqual(reward["death"], 1.0)
+        self.assertLess(
+            reward["death"] * GameConfig.REWARD_WEIGHT_DICT["death"],
+            0.0,
+        )
+
+    def test_minion_hp_point_does_not_reward_clearing_enemy_minions(self):
+        initial = make_frame(
+            npcs=[
+                make_tower(1, x=-15000),
+                make_tower(2, x=15000),
+                make_minion(301, 2, hp=1000, x=1000),
+            ],
+        )
+        enemy_minion_damaged = make_frame(
+            frame_no=1,
+            npcs=[
+                make_tower(1, x=-15000),
+                make_tower(2, x=15000),
+                make_minion(301, 2, hp=700, x=1000),
+                make_minion(302, 2, hp=1000, x=1500),
+            ],
+        )
+
+        self.manager.result(initial)
+        reward = self.manager.result(enemy_minion_damaged)
+
+        self.assertAlmostEqual(reward["minion_hp_point"], 0.0)
+
+    def test_minion_hp_point_penalizes_visible_enemy_hero_hitting_own_minions(self):
+        initial = make_frame(
+            enemy=make_hero(ENEMY_ID, 2, attack_target=401, x=1000),
+            npcs=[
+                make_tower(1, x=-15000),
+                make_tower(2, x=15000),
+                make_minion(401, 1, hp=1000, x=-1000),
+            ],
+        )
+        own_minion_damaged = make_frame(
+            frame_no=1,
+            enemy=make_hero(ENEMY_ID, 2, attack_target=401, x=1000),
+            npcs=[
+                make_tower(1, x=-15000),
+                make_tower(2, x=15000),
+                make_minion(401, 1, hp=800, x=-1000),
+            ],
+        )
+
+        self.manager.result(initial)
+        reward = self.manager.result(own_minion_damaged)
+
+        self.assertAlmostEqual(reward["minion_hp_point"], -0.2)
+        self.assertAlmostEqual(
+            reward["minion_hp_point"] * GameConfig.REWARD_WEIGHT_DICT["minion_hp_point"],
+            -0.02,
+        )
+
+    def test_minion_hp_point_ignores_non_hero_lane_damage_to_own_minions(self):
+        initial = make_frame(
+            enemy=make_hero(ENEMY_ID, 2, attack_target=0, x=1000),
+            npcs=[
+                make_tower(1, x=-15000),
+                make_tower(2, x=15000),
+                make_minion(401, 1, hp=1000, x=-1000),
+            ],
+        )
+        own_minion_damaged_by_wave = make_frame(
+            frame_no=1,
+            enemy=make_hero(ENEMY_ID, 2, attack_target=0, x=1000),
+            npcs=[
+                make_tower(1, x=-15000),
+                make_tower(2, x=15000),
+                make_minion(401, 1, hp=800, x=-1000),
+            ],
+        )
+
+        self.manager.result(initial)
+        reward = self.manager.result(own_minion_damaged_by_wave)
+
+        self.assertAlmostEqual(reward["minion_hp_point"], 0.0)
 
     def test_real_probe_dead_action_is_attributed_to_the_enemy(self):
         observation = load_obs("episode_03/frame_01874.json")

@@ -9,10 +9,12 @@ Author: Tencent AI Arena Authors
 目标优先的稠密奖励管理器。
 
 零和子项（主-敌之差的帧间增量）：
-  tower_hp_point, hp_point, kill, money, exp
+  tower_hp_point, hp_point(英雄对英雄伤害), kill, money, exp
 非零和子项（仅主视角）：
   lane_progress（满血后场位置惩罚：泉水强，己方神符后快速衰减，神符到中线极弱）、
   danger_penalty（低血仍处在敌方威胁区）、
+  death（自身死亡增量）、
+  minion_hp_point（可见敌方英雄攻击己方小兵造成的掉血惩罚）、
   last_hit / kill_monster（dead_action 事件归因）、
   idle_penalty（挂机惩罚：经济/伤害产出停滞且不在回撤/泉水区时累计，权重为负）
 
@@ -261,6 +263,15 @@ class GameRewardManager:
         return max(0.0, min(1.0, hero.get("hp", 0) / mh))
 
     @staticmethod
+    def _hero_damage_to_hero(hero):
+        if hero is None:
+            return 0.0
+        scale = GameConfig.HERO_DAMAGE_REWARD_SCALE
+        if scale <= 0:
+            return 0.0
+        return float(hero.get("total_hurt_to_hero", 0) or 0) / scale
+
+    @staticmethod
     def _total_exp(hero):
         if hero is None:
             return 0.0
@@ -313,7 +324,7 @@ class GameRewardManager:
                     enemy_tower,
                 )
             elif reward_name == "hp_point":
-                rs.cur_frame_value = self._hp_ratio(hero)
+                rs.cur_frame_value = self._hero_damage_to_hero(hero)
             elif reward_name == "danger_penalty":
                 main_hero, _ = self._get_camp_units(frame_data, camp)
                 enemy_camp = 2 if camp == 1 else 1
@@ -327,10 +338,14 @@ class GameRewardManager:
                 )
             elif reward_name == "kill":
                 rs.cur_frame_value = float(hero.get("kill_cnt", 0)) if hero else 0.0
+            elif reward_name == "death":
+                rs.cur_frame_value = float(hero.get("dead_cnt", 0)) if hero else 0.0
             elif reward_name == "money":
                 rs.cur_frame_value = float(hero.get("money_cnt", 0)) / 1000.0 if hero else 0.0
             elif reward_name == "exp":
                 rs.cur_frame_value = self._total_exp(hero) / 1000.0
+            elif reward_name == "minion_hp_point":
+                rs.cur_frame_value = self._minion_hp_snapshot(frame_data, camp)
             # 事件奖励与 idle_penalty 在 get_reward 中直接计算。
 
     def calculate_lane_guidance_penalty(
@@ -571,6 +586,61 @@ class GameRewardManager:
                 monster -= 1.0
         return last_hit, monster
 
+    def _minion_hp_snapshot(self, frame_data, camp):
+        """Return own minion hp plus own minions targeted by visible enemy heroes."""
+        snapshot = {"own": {}, "enemy_hero_targets_own": set()}
+        for npc in frame_data.get("npc_states", []):
+            if not (
+                npc.get("actor_type") == MINION_ACTOR_TYPE
+                and npc.get("sub_type") == MINION_SUBTYPE
+                and npc.get("camp") == camp
+            ):
+                continue
+            loc = npc.get("location", {})
+            if self._is_sentinel(loc) or not visible_to_camp(npc, camp):
+                continue
+            runtime_id = npc.get("runtime_id")
+            if runtime_id is None:
+                continue
+            max_hp = float(npc.get("max_hp", 0) or 0)
+            if max_hp <= 0:
+                continue
+            hp_ratio = max(0.0, min(1.0, float(npc.get("hp", 0) or 0) / max_hp))
+            snapshot["own"][runtime_id] = hp_ratio
+        own_minion_ids = set(snapshot["own"])
+        for hero in frame_data.get("hero_states", []):
+            if hero.get("camp") == camp or hero.get("hp", 0) <= 0:
+                continue
+            if not visible_to_camp(hero, camp):
+                continue
+            target_id = hero.get("attack_target", 0)
+            if target_id in own_minion_ids:
+                snapshot["enemy_hero_targets_own"].add(target_id)
+        return snapshot
+
+    @staticmethod
+    def _targeted_own_minion_damage(previous, current):
+        if not isinstance(previous, dict) or not isinstance(current, dict):
+            return 0.0
+        previous_own = previous.get("own", {})
+        current_own = current.get("own", {})
+        if not isinstance(previous_own, dict) or not isinstance(current_own, dict):
+            return 0.0
+        targeted = set()
+        for snapshot in (previous, current):
+            targets = snapshot.get("enemy_hero_targets_own", set())
+            if isinstance(targets, set):
+                targeted.update(targets)
+        damage = 0.0
+        for runtime_id in targeted:
+            if runtime_id not in previous_own or runtime_id not in current_own:
+                continue
+            damage += max(0.0, previous_own[runtime_id] - current_own[runtime_id])
+        return damage
+
+    def _minion_hp_point_delta(self, previous, current):
+        return -self._targeted_own_minion_damage(previous, current)
+
     def _in_retreat_zone(self, frame_data, hero, main_camp):
         """英雄是否在己方塔后方的安全回撤/泉水区（回血/回城）。"""
         hloc = hero.get("location", {})
@@ -666,8 +736,15 @@ class GameRewardManager:
                 rs.value = main.cur_frame_value
             elif reward_name == "danger_penalty":
                 rs.value = main.cur_frame_value
+            elif reward_name == "death":
+                rs.value = main.cur_frame_value - main.last_frame_value
             elif reward_name == "last_hit":
                 rs.value = self._last_hit_event
+            elif reward_name == "minion_hp_point":
+                rs.value = self._minion_hp_point_delta(
+                    main.last_frame_value,
+                    main.cur_frame_value,
+                )
             elif reward_name == "kill_monster":
                 rs.value = self._monster_event
             elif reward_name == "idle_penalty":

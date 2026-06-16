@@ -65,21 +65,24 @@ class GameConfig:
     #   2. 推塔奖励只作为终局目标的中低频信号，越塔/无兵线硬点塔折价；
     #   3. 死亡规避不能只等 dead_cnt 发生后才反馈，低血处在威胁区时给轻量逐帧惩罚。
     REWARD_WEIGHT_DICT = {
-        "tower_hp_point": 2.0,      # 双方外塔血量优势变化，越塔/无兵线推塔时折价
-        "lane_progress": -0.6,      # 满血后场位置惩罚：泉水强，神符到中线极弱
-        "hp_point": 1.5,            # sqrt(血量比例)优势变化，低血区更敏感
+        "tower_hp_point": 1.5,      # 双方外塔血量优势变化，越塔/无兵线推塔时折价
+        "lane_progress": -0.1,      # 满血后场位置惩罚：泉水强，神符到中线极弱
+        "hp_point": 2.0,            # 英雄对英雄伤害优势变化，只奖励自己打出的压制
         "danger_penalty": -0.5,     # 低血仍在敌英雄/敌塔威胁区的逐帧惩罚
         "kill": 2.5,                # 击杀数优势变化；不再与 death 重复计数
-        "money": 0.4,               # 累计经济 money_cnt 优势变化
-        "exp": 0.4,                 # 跨等级累计经验优势变化
-        "last_hit": 0.25,           # dead_action 中英雄真实补刀事件
+        "death": -2.0,              # 自身死亡增量，直接压制送死捷径
+        "money": 0.8,               # 累计经济 money_cnt 优势变化
+        "exp": 0.8,                 # 跨等级累计经验优势变化
+        "last_hit": 1.0,            # dead_action 中英雄真实补刀/阻止敌方补刀事件
+        "minion_hp_point": 0.1,     # 敌方英雄攻击己方兵的小惩罚；不奖励无脑清线
         "kill_monster": 0.3,        # dead_action 中中立野怪归属
         "idle_penalty": -0.1,       # 长时间停滞后的渐进式每帧惩罚
     }
-    TERMINAL_WIN_REWARD = 12.0
+    TERMINAL_WIN_REWARD = 8.0
     TOWER_DIVE_DISCOUNT = 0.25
-    TOWER_NO_MINION_DISCOUNT = 0.35
+    TOWER_NO_MINION_DISCOUNT = 0.15
     TOWER_PUSH_MINION_RADIUS = 6500
+    HERO_DAMAGE_REWARD_SCALE = 3000.0
     # 终局奖励已经提供结束压力；关闭全局时间衰减，保持 shaping 尺度稳定。
     TIME_SCALE_ARG = 0
     MODEL_SAVE_INTERVAL = 1800
@@ -100,7 +103,7 @@ class GameConfig:
     #   己方神符到中线只保留极弱线性引导；
     #   中线及以后为 0。仅满血启用，避免惩罚合理回撤。
     LANE_GUIDANCE_HP_THRESHOLD = 0.99
-    LANE_GUIDANCE_EPSILON = 0.02
+    LANE_GUIDANCE_EPSILON = 0.01
     LANE_GUIDANCE_BACK_EXPONENT = 4.0
     LANE_GUIDANCE_FOUNTAIN_T = -0.25
     LANE_GUIDANCE_FALLBACK_CAKE_T = -0.08
