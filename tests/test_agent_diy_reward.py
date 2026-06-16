@@ -532,6 +532,58 @@ class RewardDesignTests(unittest.TestCase):
         self.assertGreater(low_hp_reward["danger_penalty"], 0.0)
         self.assertLess(low_hp_reward["danger_penalty"], full_hp_reward["danger_penalty"])
 
+    def test_much_lower_hp_enemy_hero_does_not_trigger_danger_penalty(self):
+        frame = make_frame(
+            main=make_hero(MAIN_ID, 1, hp=300, max_hp=1000, x=0),
+            enemy=make_hero(
+                ENEMY_ID,
+                2,
+                hp=200,
+                max_hp=1000,
+                attack_range=5000,
+                x=3000,
+            ),
+        )
+
+        reward = self.manager.result(frame)
+
+        self.assertEqual(reward["danger_penalty"], 0.0)
+
+    def test_slightly_lower_hp_enemy_hero_still_triggers_danger_penalty(self):
+        frame = make_frame(
+            main=make_hero(MAIN_ID, 1, hp=300, max_hp=1000, x=0),
+            enemy=make_hero(
+                ENEMY_ID,
+                2,
+                hp=280,
+                max_hp=1000,
+                attack_range=5000,
+                x=3000,
+            ),
+        )
+
+        reward = self.manager.result(frame)
+
+        self.assertGreater(reward["danger_penalty"], 0.0)
+
+    def test_enemy_tower_danger_is_not_waived_by_low_enemy_hero_hp(self):
+        frame = make_frame(
+            main=make_hero(MAIN_ID, 1, hp=300, max_hp=1000, x=14500),
+            enemy=make_hero(
+                ENEMY_ID,
+                2,
+                hp=100,
+                max_hp=1000,
+                attack_range=5000,
+                x=3000,
+            ),
+            enemy_tower=make_tower(2, attack_target=MAIN_ID, x=15000),
+        )
+
+        reward = self.manager.result(frame)
+
+        self.assertGreater(reward["danger_penalty"], 0.0)
+
     def test_tower_damage_is_discounted_when_diving(self):
         initial = make_frame()
         safe_damage = make_frame(
