@@ -74,6 +74,16 @@ def make_minion(runtime_id, camp, *, hp=1000, x=0, z=0):
     }
 
 
+def make_cake(x, z):
+    return {
+        "configId": 5,
+        "collider": {
+            "location": {"x": x, "y": 48, "z": z},
+            "radius": 0,
+        },
+    }
+
+
 def make_frame(
     *,
     frame_no=0,
@@ -82,6 +92,7 @@ def make_frame(
     own_tower=None,
     enemy_tower=None,
     npcs=None,
+    cakes=None,
     dead_actions=None,
 ):
     return {
@@ -94,6 +105,7 @@ def make_frame(
             own_tower or make_tower(1, x=-15000),
             enemy_tower or make_tower(2, x=15000),
         ],
+        "cakes": cakes or [],
         "frame_action": {"dead_action": dead_actions or []},
     }
 
@@ -115,7 +127,6 @@ class RewardDesignTests(unittest.TestCase):
                 "exp",
                 "last_hit",
                 "kill_monster",
-                "retreat_penalty",
                 "idle_penalty",
             },
         )
@@ -126,7 +137,9 @@ class RewardDesignTests(unittest.TestCase):
         )
 
     def test_first_frame_has_no_artificial_shaping_reward(self):
-        reward = self.manager.result(make_frame())
+        reward = self.manager.result(
+            make_frame(main=make_hero(MAIN_ID, 1, hp=980, max_hp=1000))
+        )
 
         self.assertAlmostEqual(reward["reward_sum"], 0.0)
         for name in GameConfig.REWARD_WEIGHT_DICT:
@@ -238,26 +251,56 @@ class RewardDesignTests(unittest.TestCase):
 
         self.assertEqual(reward["last_hit"], -1.0)
 
-    def test_retreat_penalty_only_targets_high_hp_turtling(self):
-        behind_tower = make_frame(
-            main=make_hero(MAIN_ID, 1, hp=1000, x=-18000),
+    def test_full_hp_lane_guidance_decays_from_fountain_to_own_cake_then_center(self):
+        cakes = [
+            make_cake(-15200, 0),
+            make_cake(15200, 0),
+        ]
+        fountain = make_frame(
+            main=make_hero(MAIN_ID, 1, hp=1000, x=-23000),
+            cakes=cakes,
         )
-        normal_lane = make_frame(
+        own_cake = make_frame(
             frame_no=1,
-            main=make_hero(MAIN_ID, 1, hp=1000, x=-5000),
+            main=make_hero(MAIN_ID, 1, hp=1000, x=-15200),
+            cakes=cakes,
         )
-        low_hp_retreat = make_frame(
+        between_cake_and_center = make_frame(
             frame_no=2,
-            main=make_hero(MAIN_ID, 1, hp=300, x=-18000),
+            main=make_hero(MAIN_ID, 1, hp=1000, x=-7600),
+            cakes=cakes,
+        )
+        center = make_frame(
+            frame_no=3,
+            main=make_hero(MAIN_ID, 1, hp=1000, x=0),
+            cakes=cakes,
         )
 
-        turtling_reward = self.manager.result(behind_tower)
-        lane_reward = self.manager.result(normal_lane)
-        retreat_reward = self.manager.result(low_hp_retreat)
+        fountain_reward = self.manager.result(fountain)
+        cake_reward = self.manager.result(own_cake)
+        weak_reward = self.manager.result(between_cake_and_center)
+        center_reward = self.manager.result(center)
 
-        self.assertGreater(turtling_reward["retreat_penalty"], 0.0)
-        self.assertEqual(lane_reward["retreat_penalty"], 0.0)
-        self.assertEqual(retreat_reward["retreat_penalty"], 0.0)
+        self.assertAlmostEqual(fountain_reward["lane_progress"], 1.0)
+        self.assertLess(cake_reward["lane_progress"], 0.06)
+        self.assertGreater(cake_reward["lane_progress"], 0.0)
+        self.assertLess(weak_reward["lane_progress"], cake_reward["lane_progress"])
+        self.assertGreater(weak_reward["lane_progress"], 0.0)
+        self.assertEqual(center_reward["lane_progress"], 0.0)
+
+        lane_weight = GameConfig.REWARD_WEIGHT_DICT["lane_progress"]
+        self.assertLess(fountain_reward["lane_progress"] * lane_weight, 0.0)
+
+    def test_lane_guidance_only_applies_at_near_full_hp(self):
+        cakes = [make_cake(-15200, 0)]
+        low_hp_fountain = make_frame(
+            main=make_hero(MAIN_ID, 1, hp=980, max_hp=1000, x=-23000),
+            cakes=cakes,
+        )
+
+        reward = self.manager.result(low_hp_fountain)
+
+        self.assertEqual(reward["lane_progress"], 0.0)
 
     def test_low_hp_in_enemy_threat_area_is_penalized(self):
         initial = make_frame(
@@ -286,6 +329,35 @@ class RewardDesignTests(unittest.TestCase):
             0.0,
         )
         self.assertEqual(retreat_reward["danger_penalty"], 0.0)
+
+    def test_invisible_enemy_hero_does_not_trigger_danger_penalty(self):
+        enemy = make_hero(ENEMY_ID, 2, hp=1000, attack_range=5000, x=3000)
+        enemy["camp_visible"] = [False, True]
+        frame = make_frame(
+            main=make_hero(MAIN_ID, 1, hp=300, x=0),
+            enemy=enemy,
+        )
+
+        reward = self.manager.result(frame)
+
+        self.assertEqual(reward["danger_penalty"], 0.0)
+
+    def test_enemy_hero_danger_penalty_scales_with_enemy_hp(self):
+        full_hp_enemy = make_frame(
+            main=make_hero(MAIN_ID, 1, hp=300, x=0),
+            enemy=make_hero(ENEMY_ID, 2, hp=1000, max_hp=1000, attack_range=5000, x=3000),
+        )
+        low_hp_enemy = make_frame(
+            main=make_hero(MAIN_ID, 1, hp=300, x=0),
+            enemy=make_hero(ENEMY_ID, 2, hp=100, max_hp=1000, attack_range=5000, x=3000),
+        )
+
+        full_hp_reward = GameRewardManager(MAIN_ID).result(full_hp_enemy)
+        low_hp_reward = GameRewardManager(MAIN_ID).result(low_hp_enemy)
+
+        self.assertGreater(full_hp_reward["danger_penalty"], 0.0)
+        self.assertGreater(low_hp_reward["danger_penalty"], 0.0)
+        self.assertLess(low_hp_reward["danger_penalty"], full_hp_reward["danger_penalty"])
 
     def test_tower_damage_is_discounted_when_diving(self):
         initial = make_frame()

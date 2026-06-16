@@ -66,7 +66,7 @@ class GameConfig:
     #   3. 死亡规避不能只等 dead_cnt 发生后才反馈，低血处在威胁区时给轻量逐帧惩罚。
     REWARD_WEIGHT_DICT = {
         "tower_hp_point": 2.0,      # 双方外塔血量优势变化，越塔/无兵线推塔时折价
-        "lane_progress": 0.6,       # 从己方塔/泉水走到中线的势函数奖励，中线后封顶
+        "lane_progress": -0.6,      # 满血后场位置惩罚：泉水强，神符到中线极弱
         "hp_point": 1.5,            # sqrt(血量比例)优势变化，低血区更敏感
         "danger_penalty": -0.5,     # 低血仍在敌英雄/敌塔威胁区的逐帧惩罚
         "kill": 2.5,                # 击杀数优势变化；不再与 death 重复计数
@@ -74,7 +74,6 @@ class GameConfig:
         "exp": 0.4,                 # 跨等级累计经验优势变化
         "last_hit": 0.25,           # dead_action 中英雄真实补刀事件
         "kill_monster": 0.3,        # dead_action 中中立野怪归属
-        "retreat_penalty": -0.05,   # 高血量退到己方塔后的龟缩惩罚
         "idle_penalty": -0.1,       # 长时间停滞后的渐进式每帧惩罚
     }
     TERMINAL_WIN_REWARD = 12.0
@@ -94,6 +93,18 @@ class GameConfig:
     DANGER_RANGE_MULT = 1.15         # 敌方攻击距离的安全余量
     DANGER_FRAME_SCALE = 1.0 / 30.0  # 逐帧尺度，避免比终局/击杀奖励更尖锐
 
+    # ---- 满血后场位置引导 ----
+    # lane_progress 现在表示“惩罚强度”而不是正向势函数：
+    #   泉水/深后场约 1.0；
+    #   到己方神符高次衰减到一个很小的 epsilon；
+    #   己方神符到中线只保留极弱线性引导；
+    #   中线及以后为 0。仅满血启用，避免惩罚合理回撤。
+    LANE_GUIDANCE_HP_THRESHOLD = 0.99
+    LANE_GUIDANCE_EPSILON = 0.04
+    LANE_GUIDANCE_BACK_EXPONENT = 4.0
+    LANE_GUIDANCE_FOUNTAIN_T = -0.25
+    LANE_GUIDANCE_FALLBACK_CAKE_T = -0.08
+
     # ---- 挂机检测参数（纯产出停滞判据）----
     # 判据：经济(money_cnt)与对英雄伤害(total_hurt_to_hero)帧间增量同时停滞 → 累计 inactive。
     # 叠加「非回城/非泉水」豁免（冻结计数而非清零）：在己方塔后方的安全回撤/泉水区不罚。
@@ -109,9 +120,6 @@ class GameConfig:
     # 地图尺度 MAP_SCALE=46000，英雄移速 ~350，每帧(~1/30s)位移约 12 单位。
     # 设 30 约需 2-3 帧连续移动才能重置；过滤掉贴墙卡住的微小抖动。
     IDLE_POS_DELTA_THRESHOLD = 30
-    RETREAT_HP_THRESHOLD = 0.8       # 低于该血量时后撤视为合理，不惩罚
-    RETREAT_MAX_DISTANCE_RATIO = 0.2 # 最多按塔间距 20% 归一，限制单帧尺度
-
 
 class FeatureConfig:
     """特征工程的唯一真源（single source of truth）。
