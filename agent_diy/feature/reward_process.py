@@ -11,6 +11,7 @@ Author: Tencent AI Arena Authors
 零和子项（主-敌之差的帧间增量）：
   tower_hp_point, hp_point, kill, money, exp
 非零和子项（仅主视角）：
+  danger_penalty（低血仍处在敌方威胁区）、
   retreat_penalty（仅惩罚高血量时退到己方塔后）、
   last_hit / kill_monster（dead_action 事件归因）、
   idle_penalty（挂机惩罚：经济/伤害产出停滞且不在回撤/泉水区时累计，权重为负）
@@ -20,8 +21,9 @@ Author: Tencent AI Arena Authors
 """
 
 import math
-from agent_diy.conf.conf import GameConfig
+
 from agent_diy.conf.conf import FeatureConfig as FC
+from agent_diy.conf.conf import GameConfig
 from agent_diy.feature.targeting import target_slot_enemy_soldiers, visible_to_camp
 
 TOWER_SUBTYPE = 21
@@ -81,13 +83,13 @@ class GameRewardManager:
         self.m_main_calc_frame_map = init_calc_frame_map()
         self.m_enemy_calc_frame_map = init_calc_frame_map()
         self.time_scale_arg = GameConfig.TIME_SCALE_ARG
-        # 挂机检测：跟踪产出类累计值的上帧快照
+        # 挂机检测：跟踪产出类累计值的上帧快照。
         self._last_money_cnt = 0.0
         self._last_hurt_to_hero = 0.0
         self._last_pos = None
         self._inactive_frames = 0
         self._first_frame = True
-        # 距离整形：当前帧 action 的越程攻击惩罚，由 workflow 在 predict 后注入
+        # 距离整形：当前帧 action 的越程攻击惩罚，由 workflow 在 predict 后注入。
         self._distance_penalty = 0.0
         self._last_hit_event = 0.0
         self._monster_event = 0.0
@@ -220,6 +222,13 @@ class GameRewardManager:
         return math.sqrt(ratio)
 
     @staticmethod
+    def _raw_hp_ratio(hero):
+        if hero is None:
+            return 0.0
+        mh = hero.get("max_hp", 0) or 1
+        return max(0.0, min(1.0, hero.get("hp", 0) / mh))
+
+    @staticmethod
     def _total_exp(hero):
         if hero is None:
             return 0.0
@@ -262,6 +271,17 @@ class GameRewardManager:
                     rs.cur_frame_value = previous
             elif reward_name == "hp_point":
                 rs.cur_frame_value = self._hp_ratio(hero)
+            elif reward_name == "danger_penalty":
+                main_hero, _ = self._get_camp_units(frame_data, camp)
+                enemy_camp = 2 if camp == 1 else 1
+                enemy_hero, enemy_tower = self._get_camp_units(frame_data, enemy_camp)
+                rs.cur_frame_value = self.calculate_danger_penalty(
+                    frame_data,
+                    main_hero,
+                    enemy_hero,
+                    enemy_tower,
+                    camp,
+                )
             elif reward_name == "kill":
                 rs.cur_frame_value = float(hero.get("kill_cnt", 0)) if hero else 0.0
             elif reward_name == "money":
@@ -290,9 +310,7 @@ class GameRewardManager:
         own_pos = (main_tower["location"]["x"], main_tower["location"]["z"])
         enemy_pos = (enemy_tower["location"]["x"], enemy_tower["location"]["z"])
 
-        hp = main_hero.get("hp", 0)
-        max_hp = main_hero.get("max_hp", 1) or 1
-        hp_ratio = max(0.0, min(1.0, hp / max_hp))
+        hp_ratio = self._raw_hp_ratio(main_hero)
         if hp_ratio < GameConfig.RETREAT_HP_THRESHOLD:
             return 0.0
 
@@ -309,6 +327,97 @@ class GameRewardManager:
             return 0.0
         return min(distance_behind_tower / scale, 1.0)
 
+    def calculate_danger_penalty(
+        self,
+        frame_data,
+        main_hero,
+        enemy_hero,
+        enemy_tower,
+        main_camp,
+    ):
+        if main_hero is None or self._is_sentinel(main_hero.get("location", {})):
+            return 0.0
+        hp_ratio = self._raw_hp_ratio(main_hero)
+        threshold = GameConfig.DANGER_HP_THRESHOLD
+        if hp_ratio >= threshold:
+            return 0.0
+
+        hero_pos = (main_hero["location"]["x"], main_hero["location"]["z"])
+        threat = 0.0
+        if enemy_hero is not None and enemy_hero.get("hp", 0) > 0:
+            loc = enemy_hero.get("location", {})
+            if not self._is_sentinel(loc):
+                enemy_pos = (loc["x"], loc["z"])
+                enemy_range = float(enemy_hero.get("attack_range", 0) or 0)
+                threat_range = max(enemy_range * GameConfig.DANGER_RANGE_MULT, 3500.0)
+                dist = math.dist(hero_pos, enemy_pos)
+                if dist <= threat_range:
+                    threat = max(threat, 1.0 - (dist / threat_range) * 0.75)
+
+        if enemy_tower is not None and enemy_tower.get("hp", 0) > 0:
+            tower_loc = enemy_tower.get("location", {})
+            if not self._is_sentinel(tower_loc):
+                tower_pos = (tower_loc["x"], tower_loc["z"])
+                tower_range = float(enemy_tower.get("attack_range", 0) or 0)
+                dist = math.dist(hero_pos, tower_pos)
+                tower_targets_me = enemy_tower.get("attack_target") == main_hero.get("runtime_id")
+                unsafe_tower_range = tower_range > 0 and dist <= tower_range
+                if tower_targets_me or (
+                    unsafe_tower_range
+                    and not self._has_minion_pressure_on_enemy_tower(frame_data, main_camp)
+                ):
+                    threat = max(threat, 1.0)
+
+        if threat <= 0:
+            return 0.0
+        low_hp_severity = (threshold - hp_ratio) / threshold
+        return low_hp_severity * threat * GameConfig.DANGER_FRAME_SCALE
+
+    def _has_minion_pressure_on_enemy_tower(self, frame_data, main_camp):
+        enemy_camp = 2 if main_camp == 1 else 1
+        _, enemy_tower = self._get_camp_units(frame_data, enemy_camp)
+        if enemy_tower is None or enemy_tower.get("hp", 0) <= 0:
+            return False
+        tower_loc = enemy_tower.get("location", {})
+        if self._is_sentinel(tower_loc):
+            return False
+        tower_pos = (tower_loc["x"], tower_loc["z"])
+        tower_target = enemy_tower.get("attack_target")
+        radius = GameConfig.TOWER_PUSH_MINION_RADIUS
+        for npc in frame_data.get("npc_states", []):
+            if not (
+                npc.get("actor_type") == MINION_ACTOR_TYPE
+                and npc.get("sub_type") == MINION_SUBTYPE
+                and npc.get("camp") == main_camp
+                and npc.get("hp", 0) > 0
+            ):
+                continue
+            if tower_target and tower_target == npc.get("runtime_id"):
+                return True
+            loc = npc.get("location", {})
+            if self._is_sentinel(loc):
+                continue
+            if math.dist((loc["x"], loc["z"]), tower_pos) <= radius:
+                return True
+        return False
+
+    def _main_hero_in_enemy_tower_range(self, frame_data, main_camp):
+        main_hero, _ = self._get_camp_units(frame_data, main_camp)
+        enemy_camp = 2 if main_camp == 1 else 1
+        _, enemy_tower = self._get_camp_units(frame_data, enemy_camp)
+        if main_hero is None or enemy_tower is None:
+            return False
+        if self._is_sentinel(main_hero.get("location", {})) or self._is_sentinel(
+            enemy_tower.get("location", {})
+        ):
+            return False
+        tower_range = float(enemy_tower.get("attack_range", 0) or 0)
+        if tower_range <= 0:
+            return False
+        hero_pos = (main_hero["location"]["x"], main_hero["location"]["z"])
+        tower_pos = (enemy_tower["location"]["x"], enemy_tower["location"]["z"])
+        return math.dist(hero_pos, tower_pos) <= tower_range
+
     def frame_data_process(self, frame_data):
         main_camp, enemy_camp = -1, -1
         for hero in frame_data["hero_states"]:
@@ -324,7 +433,7 @@ class GameRewardManager:
             main_camp,
             enemy_camp,
         )
-        # 首帧同步 last 到 cur，消除 0→真实值 造成的假增量 spike
+        # 首帧同步 last 到 cur，消除 0→真实值 造成的假增量 spike。
         if self._first_frame:
             self._first_frame = False
             for calc_map in (self.m_main_calc_frame_map, self.m_enemy_calc_frame_map):
@@ -338,9 +447,7 @@ class GameRewardManager:
                 next((h.get("total_hurt_to_hero", 0) for h in frame_data.get("hero_states", [])
                       if h.get("camp") == main_camp and h.get("hp", 0) > 0), 0)
             )
-            # 首帧位置快照（挂机检测位置增量基准）
             self._last_pos = self._get_main_hero_pos(frame_data, main_camp)
-        # 挂机检测：基于经济/伤害产出（非位置）+ 回撤区豁免
         self._update_inactive(frame_data, main_camp)
 
     def _objective_events(self, frame_data, main_camp, enemy_camp):
@@ -379,15 +486,10 @@ class GameRewardManager:
         return last_hit, monster
 
     def _in_retreat_zone(self, frame_data, hero, main_camp):
-        """英雄是否在己方塔后方的安全回撤/泉水区（回血/回城）。
-
-        几何判据：到敌方外塔的距离 > 己方外塔到敌方外塔距离 × IDLE_RETREAT_RATIO。
-        即英雄比自家塔还靠后（朝己方泉水方向）。这天然涵盖「在泉水回血」与
-        「在安全后方回城」两种不该被罚的场景，且不依赖未公开的 behav_mode 编码。
-        """
+        """英雄是否在己方塔后方的安全回撤/泉水区（回血/回城）。"""
         hloc = hero.get("location", {})
         if self._is_sentinel(hloc):
-            return True   # 取不到位置时保守不罚
+            return True
         _, own_tower = self._get_camp_units(frame_data, main_camp)
         enemy_camp = 2 if main_camp == 1 else 1
         _, enemy_tower = self._get_camp_units(frame_data, enemy_camp)
@@ -407,13 +509,7 @@ class GameRewardManager:
         return dist_hero_to_enemy > dist_own_to_enemy * IDLE_RETREAT_RATIO
 
     def _update_inactive(self, frame_data, main_camp):
-        """挂机计数更新（位置 + 产出双重判据 + 回撤/泉水冻结）：
-          - 有显著位移 → 清零（过滤 ambient gold 假复位）；
-          - 停滞但仍有产出（任一增量>0）→ 清零；
-          - 产出停滞 且 在回撤区（泉水回血/后方回城）→ 冻结（不增不减）；
-          - 产出停滞 且 不在回撤区 → 累加。
-        死亡（hero=None）也视为累加，鼓励尽快复活投入战斗。
-        """
+        """挂机计数更新（位置 + 产出双重判据 + 回撤/泉水冻结）。"""
         hero = None
         cur_pos = None
         for h in frame_data.get("hero_states", []):
@@ -428,7 +524,6 @@ class GameRewardManager:
             self._inactive_frames += 1
             return
 
-        # 位置增量：有显著位移则清零（独立于产出，避免 ambient gold 假复位）
         pos_moved = False
         if self._last_pos is not None and cur_pos is not None:
             dist = math.hypot(cur_pos[0] - self._last_pos[0], cur_pos[1] - self._last_pos[1])
@@ -451,7 +546,7 @@ class GameRewardManager:
             self._inactive_frames = 0
             return
         if self._in_retreat_zone(frame_data, hero, main_camp):
-            return    # 冻结，不增不减
+            return
         self._inactive_frames += 1
 
     def get_reward(self, frame_data, reward_dict):
@@ -468,10 +563,21 @@ class GameRewardManager:
                 current_advantage = main_cur_hp - enemy_cur_hp
                 last_advantage = main_last_hp - enemy_last_hp
                 rs.value = current_advantage - last_advantage
-                if rs.value > 0 and enemy_attacking_main:
-                    rs.value *= GameConfig.TOWER_DIVE_DISCOUNT
+                if rs.value > 0:
+                    if enemy_attacking_main:
+                        rs.value *= GameConfig.TOWER_DIVE_DISCOUNT
+                    elif (
+                        self._main_hero_in_enemy_tower_range(frame_data, self.main_hero_camp)
+                        and not self._has_minion_pressure_on_enemy_tower(
+                            frame_data,
+                            self.main_hero_camp,
+                        )
+                    ):
+                        rs.value *= GameConfig.TOWER_NO_MINION_DISCOUNT
                 elif rs.value < 0 and main_attacking_enemy:
                     rs.value *= GameConfig.TOWER_DIVE_DISCOUNT
+            elif reward_name == "danger_penalty":
+                rs.value = main.cur_frame_value
             elif reward_name == "retreat_penalty":
                 rs.value = main.cur_frame_value
             elif reward_name == "last_hit":
@@ -488,7 +594,7 @@ class GameRewardManager:
                 else:
                     rs.value = 0.0
             else:
-                # 通用零和子项：主-敌之差的帧间增量
+                # 通用零和子项：主-敌之差的帧间增量。
                 rs.cur_frame_value = main.cur_frame_value - enemy.cur_frame_value
                 rs.last_frame_value = main.last_frame_value - enemy.last_frame_value
                 rs.value = rs.cur_frame_value - rs.last_frame_value

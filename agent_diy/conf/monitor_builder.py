@@ -117,6 +117,7 @@ def build_monitor():
     reward_items = [
         ("rwd_tower_hp_point", "塔血优势"),
         ("rwd_hp_point", "英雄血量优势"),
+        ("rwd_danger_penalty", "低血危险惩罚"),
         ("rwd_kill", "击杀"),
         ("rwd_money", "累计经济优势"),
         ("rwd_exp", "累计经验优势"),

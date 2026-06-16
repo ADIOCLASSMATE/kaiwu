@@ -58,18 +58,16 @@ def _build_token_slices(token_segments):
 
 
 class GameConfig:
-    # 目标优先的 9 项 shaping reward。终局胜负奖励单独配置，避免被时间衰减。
+    # 目标优先的 shaping reward。终局胜负奖励单独配置，避免被时间衰减。
     #
-    # v0_43→当前调整（仅一处，最小改动、保留与 v0_43 的可比性）：
-    #   tower_hp_point 8.0 → 2.0。依据 entropy_per_head 监控：button 头停在低位
-    #   不再下降、move 头几乎不动、只有 target 头在学。推塔是低频大事件，权重 8.0
-    #   会让其 advantage spike 在反传时主导 button 头的梯度方向，把对线期高频的
-    #   last_hit/hp_point 信号在数值上淹没。压到 2.0（与 kill 同量级）让高频对线
-    #   信号在 button 头的 advantage 里占比回升，预期 button 头熵恢复下降。
-    #   其余 8 项权重不变，保持已验证能学的状态。
+    # 设计目标：
+    #   1. 对线期高频信号（补刀、经济、经验、血量）要稳定压过站撸噪声；
+    #   2. 推塔奖励只作为终局目标的中低频信号，越塔/无兵线硬点塔折价；
+    #   3. 死亡规避不能只等 dead_cnt 发生后才反馈，低血处在威胁区时给轻量逐帧惩罚。
     REWARD_WEIGHT_DICT = {
-        "tower_hp_point": 2.0,      # 双方外塔血量优势变化，越塔换血时折价（v0_43: 8.0）
+        "tower_hp_point": 2.0,      # 双方外塔血量优势变化，越塔/无兵线推塔时折价
         "hp_point": 1.5,            # sqrt(血量比例)优势变化，低血区更敏感
+        "danger_penalty": -0.5,     # 低血仍在敌英雄/敌塔威胁区的逐帧惩罚
         "kill": 2.5,                # 击杀数优势变化；不再与 death 重复计数
         "money": 0.4,               # 累计经济 money_cnt 优势变化
         "exp": 0.4,                 # 跨等级累计经验优势变化
@@ -80,6 +78,8 @@ class GameConfig:
     }
     TERMINAL_WIN_REWARD = 12.0
     TOWER_DIVE_DISCOUNT = 0.25
+    TOWER_NO_MINION_DISCOUNT = 0.35
+    TOWER_PUSH_MINION_RADIUS = 6500
     # 终局奖励已经提供结束压力；关闭全局时间衰减，保持 shaping 尺度稳定。
     TIME_SCALE_ARG = 0
     MODEL_SAVE_INTERVAL = 1800
@@ -87,6 +87,11 @@ class GameConfig:
     # ---- 越程攻击惩罚（distance shaping，与 action 相关，独立于上面的帧差子项）----
     OUT_OF_RANGE_PENALTY = 0.01      # 轻量动作惩罚；设 0 关闭
     ATTACK_BUTTONS = (3, 4, 5, 6, 8, 10, 11)
+
+    # ---- 低血危险区惩罚 ----
+    DANGER_HP_THRESHOLD = 0.45       # 低于该血量，若仍处于敌方威胁区则开始惩罚
+    DANGER_RANGE_MULT = 1.15         # 敌方攻击距离的安全余量
+    DANGER_FRAME_SCALE = 1.0 / 30.0  # 逐帧尺度，避免比终局/击杀奖励更尖锐
 
     # ---- 挂机检测参数（纯产出停滞判据）----
     # 判据：经济(money_cnt)与对英雄伤害(total_hurt_to_hero)帧间增量同时停滞 → 累计 inactive。

@@ -61,6 +61,19 @@ def make_tower(camp, *, hp=1000, attack_target=0, x=0, z=0):
     }
 
 
+def make_minion(runtime_id, camp, *, hp=1000, x=0, z=0):
+    return {
+        "runtime_id": runtime_id,
+        "actor_type": 1,
+        "sub_type": 11,
+        "camp": camp,
+        "hp": hp,
+        "max_hp": 1000,
+        "kill_income": 40,
+        "location": {"x": x, "z": z},
+    }
+
+
 def make_frame(
     *,
     frame_no=0,
@@ -68,6 +81,7 @@ def make_frame(
     enemy=None,
     own_tower=None,
     enemy_tower=None,
+    npcs=None,
     dead_actions=None,
 ):
     return {
@@ -76,7 +90,7 @@ def make_frame(
             main or make_hero(MAIN_ID, 1, x=-10000),
             enemy or make_hero(ENEMY_ID, 2, x=10000),
         ],
-        "npc_states": [
+        "npc_states": npcs or [
             own_tower or make_tower(1, x=-15000),
             enemy_tower or make_tower(2, x=15000),
         ],
@@ -94,6 +108,7 @@ class RewardDesignTests(unittest.TestCase):
             {
                 "tower_hp_point",
                 "hp_point",
+                "danger_penalty",
                 "kill",
                 "money",
                 "exp",
@@ -243,6 +258,34 @@ class RewardDesignTests(unittest.TestCase):
         self.assertEqual(lane_reward["retreat_penalty"], 0.0)
         self.assertEqual(retreat_reward["retreat_penalty"], 0.0)
 
+    def test_low_hp_in_enemy_threat_area_is_penalized(self):
+        initial = make_frame(
+            main=make_hero(MAIN_ID, 1, hp=1000, x=0),
+            enemy=make_hero(ENEMY_ID, 2, hp=1000, attack_range=5000, x=3000),
+        )
+        danger = make_frame(
+            frame_no=1,
+            main=make_hero(MAIN_ID, 1, hp=300, x=0),
+            enemy=make_hero(ENEMY_ID, 2, hp=1000, attack_range=5000, x=3000),
+        )
+        safe_retreat = make_frame(
+            frame_no=2,
+            main=make_hero(MAIN_ID, 1, hp=300, x=-18000),
+            enemy=make_hero(ENEMY_ID, 2, hp=1000, attack_range=5000, x=3000),
+        )
+
+        self.manager.result(initial)
+        danger_reward = self.manager.result(danger)
+        retreat_reward = self.manager.result(safe_retreat)
+
+        self.assertGreater(danger_reward["danger_penalty"], 0.0)
+        self.assertLess(
+            danger_reward["danger_penalty"]
+            * GameConfig.REWARD_WEIGHT_DICT["danger_penalty"],
+            0.0,
+        )
+        self.assertEqual(retreat_reward["danger_penalty"], 0.0)
+
     def test_tower_damage_is_discounted_when_diving(self):
         initial = make_frame()
         safe_damage = make_frame(
@@ -270,6 +313,52 @@ class RewardDesignTests(unittest.TestCase):
         self.assertAlmostEqual(
             diving_reward,
             safe_reward * GameConfig.TOWER_DIVE_DISCOUNT,
+        )
+
+    def test_tower_damage_is_discounted_without_lane_pressure(self):
+        initial = make_frame(
+            main=make_hero(MAIN_ID, 1, hp=1000, x=14500),
+            enemy=make_hero(ENEMY_ID, 2, hp=1000, x=9000),
+            enemy_tower=make_tower(2, hp=1000, x=15000),
+        )
+        no_wave_damage = make_frame(
+            frame_no=1,
+            main=make_hero(MAIN_ID, 1, hp=1000, x=14500),
+            enemy=make_hero(ENEMY_ID, 2, hp=1000, x=9000),
+            enemy_tower=make_tower(2, hp=900, x=15000),
+        )
+
+        self.manager.result(initial)
+        no_wave_reward = self.manager.result(no_wave_damage)["tower_hp_point"]
+
+        with_wave_manager = GameRewardManager(MAIN_ID)
+        with_wave_initial = make_frame(
+            main=make_hero(MAIN_ID, 1, hp=1000, x=14500),
+            enemy=make_hero(ENEMY_ID, 2, hp=1000, x=9000),
+            enemy_tower=make_tower(2, hp=1000, x=15000),
+            npcs=[
+                make_tower(1, x=-15000),
+                make_tower(2, hp=1000, x=15000),
+                make_minion(301, 1, x=14200),
+            ],
+        )
+        with_wave_damage = make_frame(
+            frame_no=1,
+            main=make_hero(MAIN_ID, 1, hp=1000, x=14500),
+            enemy=make_hero(ENEMY_ID, 2, hp=1000, x=9000),
+            enemy_tower=make_tower(2, hp=900, x=15000),
+            npcs=[
+                make_tower(1, x=-15000),
+                make_tower(2, hp=900, x=15000),
+                make_minion(301, 1, x=14200),
+            ],
+        )
+        with_wave_manager.result(with_wave_initial)
+        with_wave_reward = with_wave_manager.result(with_wave_damage)["tower_hp_point"]
+
+        self.assertAlmostEqual(
+            no_wave_reward,
+            with_wave_reward * GameConfig.TOWER_NO_MINION_DISCOUNT,
         )
 
     def test_terminal_outcome_is_strong_symmetric_and_idempotent(self):
