@@ -133,6 +133,7 @@ class RewardDesignTests(unittest.TestCase):
                 "minion_hp_point",
                 "kill_monster",
                 "idle_penalty",
+                "tower_attack",
             },
         )
         self.assertGreater(GameConfig.TERMINAL_WIN_REWARD, 0)
@@ -720,6 +721,84 @@ class RewardDesignTests(unittest.TestCase):
             -GameConfig.OUT_OF_RANGE_PENALTY,
         )
         self.assertEqual(next_reward["distance_penalty"], 0.0)
+
+    def test_tower_attack_reward_is_one_shot_when_safe_and_in_range(self):
+        frame = make_frame(
+            main=make_hero(MAIN_ID, 1, hp=1000, attack_range=1200, x=14500),
+            enemy=make_hero(ENEMY_ID, 2, hp=1000, x=9000),
+            enemy_tower=make_tower(2, x=15000),
+            npcs=[
+                make_tower(1, x=-15000),
+                make_tower(2, x=15000),
+                make_minion(301, 1, x=14200),
+            ],
+        )
+        attack_tower = [3, 0, 0, 0, 0, 7]
+
+        self.manager.set_distance_penalty(attack_tower, frame)
+        reward = self.manager.result(frame)
+        next_reward = self.manager.result(frame)
+
+        self.assertEqual(reward["tower_attack"], 1.0)
+        self.assertAlmostEqual(
+            reward["tower_attack"] * GameConfig.REWARD_WEIGHT_DICT["tower_attack"],
+            0.02,
+        )
+        self.assertEqual(next_reward["tower_attack"], 0.0)
+
+    def test_tower_attack_reward_requires_minion_pressure(self):
+        frame = make_frame(
+            main=make_hero(MAIN_ID, 1, hp=1000, attack_range=1200, x=14500),
+            enemy=make_hero(ENEMY_ID, 2, hp=1000, x=9000),
+            enemy_tower=make_tower(2, x=15000),
+        )
+
+        self.manager.set_distance_penalty([3, 0, 0, 0, 0, 7], frame)
+        reward = self.manager.result(frame)
+
+        self.assertEqual(reward["tower_attack"], 0.0)
+
+    def test_tower_attack_reward_requires_attack_range(self):
+        frame = make_frame(
+            main=make_hero(MAIN_ID, 1, hp=1000, attack_range=1000, x=12000),
+            enemy=make_hero(ENEMY_ID, 2, hp=1000, x=9000),
+            enemy_tower=make_tower(2, x=15000),
+            npcs=[
+                make_tower(1, x=-15000),
+                make_tower(2, x=15000),
+                make_minion(301, 1, x=14200),
+            ],
+        )
+
+        self.manager.set_distance_penalty([3, 0, 0, 0, 0, 7], frame)
+        reward = self.manager.result(frame)
+
+        self.assertEqual(reward["tower_attack"], 0.0)
+
+    def test_tower_attack_reward_is_blocked_by_low_hp_danger(self):
+        frame = make_frame(
+            main=make_hero(MAIN_ID, 1, hp=300, max_hp=1000, attack_range=1200, x=14500),
+            enemy=make_hero(
+                ENEMY_ID,
+                2,
+                hp=1000,
+                max_hp=1000,
+                attack_range=5000,
+                x=13500,
+            ),
+            enemy_tower=make_tower(2, x=15000),
+            npcs=[
+                make_tower(1, x=-15000),
+                make_tower(2, x=15000),
+                make_minion(301, 1, x=14200),
+            ],
+        )
+
+        self.manager.set_distance_penalty([3, 0, 0, 0, 0, 7], frame)
+        reward = self.manager.result(frame)
+
+        self.assertEqual(reward["tower_attack"], 0.0)
+        self.assertGreater(reward["danger_penalty"], 0.0)
 
     def test_idle_penalty_has_bounded_per_frame_scale(self):
         frame = make_frame()
