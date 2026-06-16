@@ -520,13 +520,13 @@ class RewardDesignTests(unittest.TestCase):
             main=make_hero(MAIN_ID, 1, hp=300, x=0),
             enemy=make_hero(ENEMY_ID, 2, hp=1000, max_hp=1000, attack_range=5000, x=3000),
         )
-        low_hp_enemy = make_frame(
+        lower_but_still_dangerous_enemy = make_frame(
             main=make_hero(MAIN_ID, 1, hp=300, x=0),
-            enemy=make_hero(ENEMY_ID, 2, hp=100, max_hp=1000, attack_range=5000, x=3000),
+            enemy=make_hero(ENEMY_ID, 2, hp=250, max_hp=1000, attack_range=5000, x=3000),
         )
 
         full_hp_reward = GameRewardManager(MAIN_ID).result(full_hp_enemy)
-        low_hp_reward = GameRewardManager(MAIN_ID).result(low_hp_enemy)
+        low_hp_reward = GameRewardManager(MAIN_ID).result(lower_but_still_dangerous_enemy)
 
         self.assertGreater(full_hp_reward["danger_penalty"], 0.0)
         self.assertGreater(low_hp_reward["danger_penalty"], 0.0)

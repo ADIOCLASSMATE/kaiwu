@@ -452,8 +452,16 @@ class GameRewardManager:
                 threat_range = max(enemy_range * GameConfig.DANGER_RANGE_MULT, 3500.0)
                 dist = math.dist(hero_pos, enemy_pos)
                 if dist <= threat_range:
+                    main_hp_ratio = hp_ratio
                     hp_threat = self._raw_hp_ratio(enemy_hero)
-                    threat = max(threat, (1.0 - (dist / threat_range) * 0.75) * hp_threat)
+                    counterplay_cutoff = (
+                        main_hp_ratio * GameConfig.DANGER_COUNTERPLAY_HP_RATIO
+                    )
+                    if hp_threat > counterplay_cutoff:
+                        threat = max(
+                            threat,
+                            (1.0 - (dist / threat_range) * 0.75) * hp_threat,
+                        )
 
         if enemy_tower is not None and enemy_tower.get("hp", 0) > 0:
             tower_loc = enemy_tower.get("location", {})

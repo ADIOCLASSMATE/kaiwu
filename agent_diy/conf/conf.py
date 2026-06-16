@@ -95,6 +95,8 @@ class GameConfig:
     DANGER_HP_THRESHOLD = 0.45       # 低于该血量，若仍处于敌方威胁区则开始惩罚
     DANGER_RANGE_MULT = 1.15         # 敌方攻击距离的安全余量
     DANGER_FRAME_SCALE = 1.0 / 30.0  # 逐帧尺度，避免比终局/击杀奖励更尖锐
+    # 敌方明显更残时允许低血反打/追击：只豁免敌英雄威胁，不豁免敌塔威胁。
+    DANGER_COUNTERPLAY_HP_RATIO = 0.8
 
     # ---- 满血后场位置引导 ----
     # lane_progress 现在表示“惩罚强度”而不是正向势函数：
