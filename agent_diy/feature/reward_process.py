@@ -91,6 +91,11 @@ class GameRewardManager:
         self._first_frame = True
         # 距离整形：当前帧 action 的越程攻击惩罚，由 workflow 在 predict 后注入。
         self._distance_penalty = 0.0
+        self._attack_action_cnt = 0
+        self._out_of_range_cnt = 0
+        self._out_of_range_sum = 0.0
+        self._reward_frame_cnt = 0
+        self._idle_triggered_cnt = 0
         self._last_hit_event = 0.0
         self._monster_event = 0.0
         self._terminal_applied = False
@@ -143,7 +148,33 @@ class GameRewardManager:
 
     def set_distance_penalty(self, action, decided_frame_state):
         """由 workflow 在 predict/exploit 后调用，注入当前 action 的距离惩罚。"""
+        if action is not None and len(action) >= 1 and action[0] in GameConfig.ATTACK_BUTTONS:
+            self._attack_action_cnt += 1
         self._distance_penalty = self.out_of_range_penalty(action, decided_frame_state)
+        if self._distance_penalty < 0:
+            self._out_of_range_cnt += 1
+            self._out_of_range_sum += self._distance_penalty
+
+    def consume_monitor_stats(self):
+        """Return per-episode reward health stats and reset their counters."""
+        attack_cnt = self._attack_action_cnt
+        frame_cnt = self._reward_frame_cnt
+        out_of_range_rate = self._out_of_range_cnt / attack_cnt if attack_cnt > 0 else 0.0
+        idle_triggered_rate = self._idle_triggered_cnt / frame_cnt if frame_cnt > 0 else 0.0
+        stats = {
+            "out_of_range_cnt": self._out_of_range_cnt,
+            "out_of_range_rate": round(out_of_range_rate, 4),
+            "out_of_range_sum": round(self._out_of_range_sum, 3),
+            "attack_action_cnt": attack_cnt,
+            "idle_triggered": self._idle_triggered_cnt,
+            "idle_triggered_rate": round(idle_triggered_rate, 4),
+        }
+        self._attack_action_cnt = 0
+        self._out_of_range_cnt = 0
+        self._out_of_range_sum = 0.0
+        self._reward_frame_cnt = 0
+        self._idle_triggered_cnt = 0
+        return stats
 
     # ---- distance shaping 辅助：定位主英雄 / 敌英雄 / 第 k 近敌方小兵 / 最近野怪 ----
     def _main_hero(self, fs):
@@ -659,6 +690,9 @@ class GameRewardManager:
         reward_sum += self._distance_penalty
         self._distance_penalty = 0.0
         reward_dict["reward_sum"] = reward_sum
+        self._reward_frame_cnt += 1
+        if reward_dict.get("idle_penalty", 0.0) > 0:
+            self._idle_triggered_cnt += 1
 
     def apply_terminal_outcome(self, reward_dict, frame_data, win=None):
         """Add a one-shot terminal reward and return its weighted contribution."""

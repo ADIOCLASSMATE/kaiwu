@@ -392,6 +392,11 @@ class EpisodeRunner:
                             for k, v in reward_item_sum.items():
                                 monitor_data["rwd_" + k] = round(v, 3)
 
+                            # reward 健康度：越程动作与挂机触发的逐局统计。
+                            monitor_data.update(
+                                self.agents[monitor_side].reward_manager.consume_monitor_stats()
+                            )
+
                             # 对局结果指标：从最后一帧取 monitor_side 英雄的终局状态。
                             outcome = self._episode_outcome(observation, monitor_side)
                             monitor_data.update(outcome)

@@ -29,6 +29,7 @@ def build_monitor():
         ("feat_nan", "NaN数", "1"),
         ("feat_inf", "Inf数", "1"),
         ("feat_neg", "负值数", "1"),
+        ("feat_frames", "统计帧数", "1"),
     ]
     builder = builder.add_group(group_name="特征有效性", group_name_en="feature_validity")
     for en, cn, prec in validity_items:
@@ -49,6 +50,7 @@ def build_monitor():
         ("enemy_minions", "敌方小兵"),
         ("monsters", "野怪"),
         ("bullets", "弹道"),
+        ("cakes", "神符"),
     ]
     builder = builder.add_group(group_name="Token占位率", group_name_en="token_exists")
     for en, cn in tok_labels:
@@ -82,6 +84,19 @@ def build_monitor():
         )
     builder = builder.end_group()
 
+    # ---- Global 激活度：均值 / 标准差 ----
+    builder = builder.add_group(group_name="Global激活度", group_name_en="global_act")
+    for metric, cn, prec in [
+        ("feat_global_mean", "全局段均值", "0.0001"),
+        ("feat_global_std", "全局段波动", "0.0001"),
+    ]:
+        builder = (
+            builder.add_panel(name=cn, name_en=metric, type="line", unit="")
+            .add_metric(metrics_name=metric, expr="round(avg(%s{}), %s)" % (metric, prec))
+            .end_panel()
+        )
+    builder = builder.end_group()
+
     # ---- 死特征维度数（整局 std ≈ 0 的维度数）----
     builder = builder.add_group(group_name="死特征维度", group_name_en="dead_dims")
     for en, cn in tok_labels:
@@ -104,6 +119,9 @@ def build_monitor():
     # ---- 算法/回报指标 ----
     builder = (
         builder.add_group(group_name="回报指标", group_name_en="reward")
+        .add_panel(name="对局序号", name_en="episode_cnt", type="line", unit="")
+        .add_metric(metrics_name="episode_cnt", expr="round(avg(episode_cnt{}), 1)")
+        .end_panel()
         .add_panel(name="累积回报", name_en="reward", type="line", unit="")
         .add_metric(metrics_name="reward", expr="round(avg(reward{}), 0.01)")
         .end_panel()
