@@ -512,6 +512,9 @@ class EpisodeRunner:
                             monitor_data.update(
                                 self.agents[monitor_side].reward_manager.consume_monitor_stats()
                             )
+                            monitor_data.update(
+                                self.agents[monitor_side].consume_action_mask_stats()
+                            )
 
                             # 对局结果指标：从最后一帧取 monitor_side 英雄的终局状态。
                             outcome = self._episode_outcome(observation, monitor_side)

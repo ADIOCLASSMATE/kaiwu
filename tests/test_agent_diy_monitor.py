@@ -136,6 +136,21 @@ class AgentDiyMonitorTests(unittest.TestCase):
 
         self.assertIn("episode_cnt", metrics)
 
+    def test_action_mask_health_metrics_have_monitor_panels(self):
+        metrics = _monitor_metric_names()
+
+        expected = {
+            "button3_legal_checked_cnt",
+            "button3_entity_target_legal_cnt",
+            "button3_entity_target_legal_rate",
+            "button3_no_entity_target_legal_cnt",
+            "button3_no_entity_target_legal_rate",
+            "button3_masked_no_entity_target_cnt",
+            "button3_target0_or_self_suppressed_cnt",
+            "button3_target0_or_self_suppressed_rate",
+        }
+        self.assertEqual(expected - metrics, set())
+
     def test_rate_panels_round_to_fractional_precision(self):
         exprs = _monitor_exprs()
 

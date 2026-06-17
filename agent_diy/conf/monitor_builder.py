@@ -259,6 +259,26 @@ def build_monitor():
             )
     builder = builder.end_group()
 
+    # ---- action mask 健康度：确认无目标普攻被约束到 button 层 ----
+    mask_items = [
+        ("button3_legal_checked_cnt", "普攻合法检查次数", "1"),
+        ("button3_entity_target_legal_cnt", "普攻有实体目标次数", "1"),
+        ("button3_entity_target_legal_rate", "普攻有实体目标占比", "0.0001"),
+        ("button3_no_entity_target_legal_cnt", "普攻无实体目标次数", "1"),
+        ("button3_no_entity_target_legal_rate", "普攻无实体目标占比", "0.0001"),
+        ("button3_masked_no_entity_target_cnt", "无目标禁普攻次数", "1"),
+        ("button3_target0_or_self_suppressed_cnt", "普攻无效目标抑制次数", "1"),
+        ("button3_target0_or_self_suppressed_rate", "普攻无效目标抑制占比", "0.0001"),
+    ]
+    builder = builder.add_group(group_name="动作Mask健康度", group_name_en="action_mask_health")
+    for en, cn, prec in mask_items:
+        builder = (
+            builder.add_panel(name=cn, name_en=en, type="line", unit="")
+            .add_metric(metrics_name=en, expr="round(avg(%s{}), %s)" % (en, prec))
+            .end_panel()
+        )
+    builder = builder.end_group()
+
     # ---- 挂机检测健康度 ----
     idle_items = [
         ("idle_triggered", "触发挂机帧数", "1"),

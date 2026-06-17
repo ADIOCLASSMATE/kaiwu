@@ -14,10 +14,10 @@ class FeatureLayoutTests(unittest.TestCase):
         self.assertEqual(FC.CAKE_DIM, 6)
         self.assertEqual(FC.NUM_TOKENS, 19)
         self.assertEqual(FC.TOKEN_FEATURE_DIM, 542)
-        self.assertEqual(FC.GLOBAL_DIM, 14)
-        self.assertEqual(FC.FEATURE_DIM, 556)
-        self.assertEqual(Config.SERI_VEC_SPLIT_SHAPE, [(556,), (85,)])
-        self.assertEqual(Config.DATA_SPLIT_SHAPE[0], 641)
+        self.assertEqual(FC.GLOBAL_DIM, 19)
+        self.assertEqual(FC.FEATURE_DIM, 561)
+        self.assertEqual(Config.SERI_VEC_SPLIT_SHAPE, [(561,), (85,)])
+        self.assertEqual(Config.DATA_SPLIT_SHAPE[0], 646)
         self.assertEqual(
             Config.data_shapes[0],
             [Config.DATA_SPLIT_SHAPE[0] * Config.LSTM_TIME_STEPS],
@@ -116,6 +116,16 @@ class FeatureLayoutTests(unittest.TestCase):
         self.assertEqual(len(global_part), FC.GLOBAL_DIM)
         self.assertEqual(game_time, [0.0, 0.0, 1.0, 0.0, 0.0])
         self.assertAlmostEqual(sum(game_time), 1.0)
+
+    def test_global_feature_contains_target_availability_block(self):
+        observation = load_obs("episode_02/frame_01802.json")
+        feature = FeatureBuilder(observation["camp"]).build(observation["frame_state"])
+        global_part = feature[FC.TOKEN_FEATURE_DIM:]
+        target_availability = global_part[-FC.TARGET_AVAIL_DIM:]
+
+        self.assertEqual(len(target_availability), FC.TARGET_AVAIL_DIM)
+        for value in target_availability:
+            self.assertIn(value, (0.0, 1.0))
 
     def test_feature_process_stats_include_new_token_group(self):
         observation = load_obs("episode_03/frame_01874.json")

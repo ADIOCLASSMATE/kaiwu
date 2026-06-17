@@ -8,7 +8,10 @@ import unittest
 import numpy as np
 
 from agent_diy.conf.conf import Config
-from agent_diy.feature.action_mask import adjust_target_legal_for_button
+from agent_diy.feature.action_mask import (
+    adjust_raw_legal_action_for_button_targets,
+    adjust_target_legal_for_button,
+)
 
 
 def _install_platform_stubs():
@@ -57,12 +60,15 @@ class AgentDiyActionMaskTests(unittest.TestCase):
         self.assertEqual(adjusted[3], 1.0)
         self.assertEqual(mask[0], 1.0)
 
-    def test_normal_attack_keeps_original_mask_when_no_entity_target_exists(self):
+    def test_normal_attack_masks_none_and_self_even_when_no_entity_target_exists(self):
         mask = np.array([1, 0, 1, 0, 0, 0, 0, 0, 0], dtype=np.float32)
 
         adjusted = adjust_target_legal_for_button(3, mask)
 
-        np.testing.assert_array_equal(adjusted, mask)
+        np.testing.assert_array_equal(
+            adjusted,
+            np.array([0, 0, 0, 0, 0, 0, 0, 0, 0], dtype=np.float32),
+        )
 
     def test_non_normal_attack_keeps_target_mask_unchanged(self):
         mask = np.array([1, 0, 1, 1, 0, 0, 0, 0, 0], dtype=np.float32)
@@ -90,6 +96,38 @@ class AgentDiyActionMaskTests(unittest.TestCase):
             target_mask,
             np.array([0, 0, 0, 1, 0, 0, 0, 0, 0], dtype=np.float32),
         )
+
+    def test_raw_legal_action_disables_normal_attack_without_entity_target(self):
+        legal_action = self._raw_legal_action()
+        legal_action[3] = 1.0
+        legal_action[2] = 1.0
+        target_matrix = self._target_matrix(legal_action)
+        target_matrix[3, [0, 2]] = 1.0
+
+        adjusted, stats = adjust_raw_legal_action_for_button_targets(
+            legal_action,
+            return_stats=True,
+        )
+
+        adjusted_targets = self._target_matrix(adjusted)
+        self.assertEqual(adjusted[3], 0.0)
+        self.assertEqual(adjusted[2], 1.0)
+        self.assertEqual(adjusted_targets[3, 0], 0.0)
+        self.assertEqual(adjusted_targets[3, 2], 0.0)
+        self.assertEqual(stats["button3_no_entity_target_legal_cnt"], 1)
+        self.assertEqual(stats["button3_masked_no_entity_target_cnt"], 1)
+
+    def test_raw_legal_action_forces_noop_if_button3_was_only_top_action(self):
+        legal_action = self._raw_legal_action()
+        legal_action[3] = 1.0
+        target_matrix = self._target_matrix(legal_action)
+        target_matrix[3, [0, 2]] = 1.0
+
+        adjusted = adjust_raw_legal_action_for_button_targets(legal_action)
+
+        self.assertEqual(adjusted[3], 0.0)
+        self.assertEqual(adjusted[1], 1.0)
+        self.assertEqual(self._target_matrix(adjusted)[1, 0], 1.0)
 
     def test_sample_masked_action_does_not_pick_none_or_self_for_normal_attack(self):
         _install_platform_stubs()
@@ -121,3 +159,38 @@ class AgentDiyActionMaskTests(unittest.TestCase):
         self.assertEqual(action[5], 3)
         self.assertEqual(d_action[0], 3)
         self.assertEqual(d_action[5], 3)
+
+    def test_sample_masked_action_falls_back_when_normal_attack_has_no_entity_target(self):
+        _install_platform_stubs()
+        from agent_diy.agent import Agent
+
+        agent = Agent.__new__(Agent)
+        agent.label_size_list = Config.LABEL_SIZE_LIST
+        agent.legal_action_size = Config.LEGAL_ACTION_SIZE_LIST
+
+        legal_action = self._raw_legal_action()
+        legal_action[2] = 1.0
+        legal_action[3] = 1.0
+        offset = Config.LABEL_SIZE_LIST[0]
+        for size in Config.LABEL_SIZE_LIST[1:-1]:
+            legal_action[offset + size - 1] = 1.0
+            offset += size
+        target_matrix = self._target_matrix(legal_action)
+        target_matrix[2, 0] = 1.0
+        target_matrix[3, [0, 2]] = 1.0
+        logits = np.zeros(Config.LABEL_SUM, dtype=np.float32)
+        logits[3] = 10.0
+
+        _, _, action, d_action = agent._sample_masked_action(logits, legal_action)
+
+        self.assertEqual(action[0], 2)
+        self.assertEqual(d_action[0], 2)
+
+    def _raw_legal_action(self):
+        return np.zeros(sum(Config.LEGAL_ACTION_SIZE_LIST), dtype=np.float32)
+
+    def _target_matrix(self, legal_action):
+        return legal_action[-Config.LEGAL_ACTION_SIZE_LIST[-1]:].reshape(
+            Config.LABEL_SIZE_LIST[0],
+            Config.LABEL_SIZE_LIST[-1],
+        )

@@ -17,7 +17,10 @@ from dataclasses import dataclass
 import numpy as np
 
 from agent_diy.conf.conf import Config, FeatureConfig
-from agent_diy.feature.action_mask import adjust_target_legal_for_button
+from agent_diy.feature.action_mask import (
+    adjust_raw_legal_action_for_button_targets,
+    adjust_target_legal_for_button,
+)
 
 
 def _env_bool(name, default=False):
@@ -443,6 +446,7 @@ class AgentDiagnostics:
         raw_target_size = Config.LABEL_SIZE_LIST[-1] * Config.LABEL_SIZE_LIST[0]
         expected_raw = Config.LABEL_SUM - Config.LABEL_SIZE_LIST[-1] + raw_target_size
         if legal.size == expected_raw:
+            legal = adjust_raw_legal_action_for_button_targets(legal)
             fixed = legal[:-raw_target_size]
             target = legal[-raw_target_size:].reshape(Config.LABEL_SIZE_LIST[0], Config.LABEL_SIZE_LIST[-1])
             action0 = int(np.clip(action0, 0, Config.LABEL_SIZE_LIST[0] - 1))

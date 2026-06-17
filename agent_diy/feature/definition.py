@@ -18,7 +18,10 @@ FeatureConfig.FEATURE_DIM 派生。
 
 from common_python.utils.common_func import create_cls, Frame
 from agent_diy.conf.conf import Config
-from agent_diy.feature.action_mask import adjust_target_legal_for_button
+from agent_diy.feature.action_mask import (
+    adjust_raw_legal_action_for_button_targets,
+    adjust_target_legal_for_button,
+)
 import numpy as np
 import collections
 import random
@@ -111,7 +114,7 @@ def build_frame(agent, observation):
 def _update_legal_action(original_la, action):
     target_size = Config.LABEL_SIZE_LIST[-1]   # 9
     top_size = Config.LABEL_SIZE_LIST[0]       # 12
-    original_la = np.array(original_la)
+    original_la = adjust_raw_legal_action_for_button_targets(np.array(original_la))
     fix_part = original_la[: -target_size * top_size]
     target_la = original_la[-target_size * top_size:]
     target_la = target_la.reshape([top_size, target_size])[action[0]]

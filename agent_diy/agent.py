@@ -22,7 +22,11 @@ from torch.optim.lr_scheduler import LambdaLR
 
 from agent_diy.model.model import Model
 from agent_diy.feature.definition import *
-from agent_diy.feature.action_mask import adjust_target_legal_for_button
+from agent_diy.feature.action_mask import (
+    action_mask_stats_rates,
+    adjust_raw_legal_action_for_button_targets,
+    adjust_target_legal_for_button,
+)
 from agent_diy.conf.conf import Config, FeatureConfig
 from agent_diy.feature.reward_process import GameRewardManager
 from agent_diy.algorithm.algorithm import Algorithm
@@ -72,6 +76,13 @@ class Agent(BaseAgent):
         self.reward_manager = None
         self.logger = logger
         self.monitor = monitor
+        self._action_mask_stats = {
+            "button3_legal_checked_cnt": 0,
+            "button3_entity_target_legal_cnt": 0,
+            "button3_no_entity_target_legal_cnt": 0,
+            "button3_masked_no_entity_target_cnt": 0,
+            "button3_target0_or_self_suppressed_cnt": 0,
+        }
         self.diagnostics = AgentDiagnostics.from_env()
         self.algorithm = Algorithm(
             self.model,
@@ -227,6 +238,12 @@ class Agent(BaseAgent):
         """返回整局特征健康度聚合指标，调用后内部累加器归零。"""
         return self.feature_processes.get_stats()
 
+    def consume_action_mask_stats(self):
+        stats = action_mask_stats_rates(self._action_mask_stats)
+        for key in self._action_mask_stats:
+            self._action_mask_stats[key] = 0
+        return stats
+
     def record_episode_step(self, episode, frame_no, observation, action, is_eval=False):
         if not self.diagnostics.enabled:
             return
@@ -259,6 +276,13 @@ class Agent(BaseAgent):
         action_list = []
         d_action_list = []
         label_split_size = [sum(self.label_size_list[: i + 1]) for i in range(len(self.label_size_list))]
+        legal_action, mask_stats = adjust_raw_legal_action_for_button_targets(
+            legal_action,
+            return_stats=True,
+        )
+        for key, value in mask_stats.items():
+            if hasattr(self, "_action_mask_stats"):
+                self._action_mask_stats[key] = self._action_mask_stats.get(key, 0) + value
         legal_actions = np.split(legal_action, label_split_size[:-1])
         logits_split = np.split(logits, label_split_size[:-1])
         for index in range(0, len(self.label_size_list) - 1):

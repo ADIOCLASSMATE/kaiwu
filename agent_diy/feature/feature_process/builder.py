@@ -227,7 +227,15 @@ class FeatureBuilder:
         # ---- cakes（按到主英雄距离排序，最多两个）----
         feat += self._cake_tokens(cakes)
         # ---- global ----
-        feat += self._global_feature(frame_no, main_hero, enemy_hero, own_tower, enemy_tower)
+        feat += self._global_feature(
+            frame_no,
+            main_hero,
+            enemy_hero,
+            own_tower,
+            enemy_tower,
+            enemy_minions,
+            monsters,
+        )
 
         assert len(feat) == FC.FEATURE_DIM, "feature len %d != FEATURE_DIM %d" % (
             len(feat), FC.FEATURE_DIM)
@@ -755,7 +763,16 @@ class FeatureBuilder:
         return [1.0] + relative_position + absolute_position + [normalized_distance]
 
     # ---- 全局特征 ----
-    def _global_feature(self, frame_no, main_hero, enemy_hero, own_tower, enemy_tower):
+    def _global_feature(
+        self,
+        frame_no,
+        main_hero,
+        enemy_hero,
+        own_tower,
+        enemy_tower,
+        enemy_minions,
+        monsters,
+    ):
         g = []
         g.append(_clip01(frame_no / 20000.0))
         g += self._game_time_onehot(frame_no)
@@ -795,6 +812,12 @@ class FeatureBuilder:
         g.append(0.5 * (money_adv + 1.0))
 
         g.append(1.0 if evis else 0.0)
+        g += self._target_availability_feature(
+            enemy_hero,
+            enemy_tower,
+            enemy_minions,
+            monsters,
+        )
         return g
 
     @staticmethod
@@ -806,3 +829,71 @@ class FeatureBuilder:
             else:
                 break
         return [1.0 if idx == bucket else 0.0 for idx in range(FC.GAME_TIME_ONEHOT_DIM)]
+
+    def _target_availability_feature(
+        self,
+        enemy_hero,
+        enemy_tower,
+        enemy_minions,
+        monsters,
+    ):
+        hero_pos = self._observable_unit_pos(enemy_hero)
+        minion_positions = [
+            pos for pos in (self._observable_unit_pos(unit) for unit in enemy_minions)
+            if pos is not None
+        ]
+        tower_pos = self._observable_unit_pos(enemy_tower)
+        monster_positions = [
+            pos for pos in (self._observable_unit_pos(unit) for unit in monsters)
+            if pos is not None
+        ]
+
+        attack_positions = []
+        if hero_pos is not None:
+            attack_positions.append(hero_pos)
+        attack_positions.extend(minion_positions)
+        if tower_pos is not None:
+            attack_positions.append(tower_pos)
+        attack_positions.extend(monster_positions)
+
+        minion_in_attack_range = self._any_in_main_atk_range(minion_positions)
+        tower_in_attack_range = self._any_in_main_atk_range([tower_pos] if tower_pos is not None else [])
+        monster_in_attack_range = self._any_in_main_atk_range(monster_positions)
+        any_in_attack_range = (
+            self._in_main_atk_range(hero_pos) > 0.0
+            or minion_in_attack_range > 0.0
+            or tower_in_attack_range > 0.0
+            or monster_in_attack_range > 0.0
+        )
+        any_near_skill_target = self._any_within_distance(attack_positions, FC.ENGAGE_SCALE)
+
+        return [
+            1.0 if any_in_attack_range else 0.0,
+            minion_in_attack_range,
+            tower_in_attack_range,
+            monster_in_attack_range,
+            any_near_skill_target,
+        ]
+
+    def _observable_unit_pos(self, unit):
+        if unit is None or unit.get("hp", 0) <= 0:
+            return None
+        loc = unit.get("location", {})
+        if self._is_sentinel(loc) or not self._visible_to_main(unit):
+            return None
+        return self._xz(loc)
+
+    def _any_in_main_atk_range(self, positions):
+        for pos in positions:
+            if pos is not None and self._in_main_atk_range(pos) > 0.0:
+                return 1.0
+        return 0.0
+
+    def _any_within_distance(self, positions, max_distance):
+        if max_distance <= 0:
+            return 0.0
+        for pos in positions:
+            distance = self._dist_to_main(pos)
+            if distance is not None and distance <= max_distance:
+                return 1.0
+        return 0.0
