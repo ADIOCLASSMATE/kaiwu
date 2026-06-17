@@ -92,101 +92,64 @@ experiment_id=15823
 
 Use the local Kaiwu session token from `~/.kaiwu/session.json`; do not use the WebIDE proxy for platform APIs.
 
-### Logs CLI
+### Primary Data Pull (recommended)
 
-Fetch all raw logs for a task by name and save JSONL:
+Use `script/pull_training_data.py` to pull all meaningful data in one command. It auto-discovers all metrics from `agent_diy/conf/monitor_builder.py` (via mock execution, so any future changes are picked up automatically), pulls ERROR/WARNING logs, and saves structured output to `logs/<task_name>/`.
 
 ```bash
-node kaiwu-cli/bin/kaiwu.js log \
-  --domain-type course \
-  --domain-id 2383 \
-  --experiment-id 15823 \
-  --name train-diy-v0_0 \
-  --all \
-  --output logs/train-diy-v0_0.jsonl
+# Pull everything for a task
+uv run python script/pull_training_data.py --task-id 219006
+
+# By task name (finds most recent)
+uv run python script/pull_training_data.py --name train-diy-v0_94
+
+# Custom output directory
+uv run python script/pull_training_data.py --task-id 219006 -o logs/my-analysis
+
+# Skip logs (metrics only)
+uv run python script/pull_training_data.py --task-id 219006 --no-logs
 ```
 
-Filter to errors:
+Output in `logs/<task_name>/`:
+- `metrics.csv` — wide time-series, load with `pd.read_csv()`
+- `metrics.json` — per-metric metadata (has_data, min, max, last, expr)
+- `summary.json` — latest snapshot grouped by category
+- `errors.jsonl` — ERROR/WARNING logs (empty if training is clean)
+
+The script queries 37 standard platform metrics + every custom metric from `monitor_builder.py` (currently ~193). Does NOT pull INFO-level platform logs (12K+ `sample_server_stat` / `env reset` loops are noise).
+
+### Logs (low-level CLI)
+
+For advanced log queries (var_level, var_module, stat_log), use the CLI directly:
 
 ```bash
 node kaiwu-cli/bin/kaiwu.js log \
-  --domain-type course \
-  --domain-id 2383 \
-  --experiment-id 15823 \
-  --name train-diy-v0_0 \
-  --level ERROR \
-  --all \
+  --domain-type course --domain-id 2383 --experiment-id 15823 \
+  --name train-diy-v0_0 --level ERROR --all \
   --output logs/train-diy-v0_0-errors.jsonl
-```
 
-List available log levels/modules:
-
-```bash
-node kaiwu-cli/bin/kaiwu.js log --domain-type course --domain-id 2383 --experiment-id 15823 --name train-diy-v0_0 --query var_level
-node kaiwu-cli/bin/kaiwu.js log --domain-type course --domain-id 2383 --experiment-id 15823 --name train-diy-v0_0 --query var_module
-```
-
-Get 15-second log counts:
-
-```bash
 node kaiwu-cli/bin/kaiwu.js log \
-  --domain-type course \
-  --domain-id 2383 \
-  --experiment-id 15823 \
-  --name train-diy-v0_0 \
-  --query stat_log \
-  --interval 15 \
-  --all
+  --domain-type course --domain-id 2383 --experiment-id 15823 \
+  --name train-diy-v0_0 --query var_level
+
+node kaiwu-cli/bin/kaiwu.js log \
+  --domain-type course --domain-id 2383 --experiment-id 15823 \
+  --name train-diy-v0_0 --query stat_log --interval 15 --all
 ```
 
-### Metrics CLI
+### Metrics (low-level CLI)
 
-Fetch all known metrics for a task by ID (default: summary with min/max/last):
+For ad-hoc single-metric queries or custom PromQL, use the CLI:
 
 ```bash
 node kaiwu-cli/bin/kaiwu.js metric \
-  --domain-type course \
-  --domain-id 2383 \
-  --experiment-id 15823 \
-  --task-id 218419
-```
+  --domain-type course --domain-id 2383 --experiment-id 15823 \
+  --task-id 218419 --names win_rate,reward,total_loss
 
-Fetch specific metrics by name:
-
-```bash
 node kaiwu-cli/bin/kaiwu.js metric \
-  --domain-type course \
-  --domain-id 2383 \
-  --experiment-id 15823 \
-  --task-id 218419 \
-  --names win_rate,reward,total_loss
+  --domain-type course --domain-id 2383 --experiment-id 15823 \
+  --task-id 218419 --expr 'avg(kaiwu_win_rate{model_id="selfplay"})' --step 60
 ```
-
-Dump raw values for a metric:
-
-```bash
-node kaiwu-cli/bin/kaiwu.js metric \
-  --domain-type course \
-  --domain-id 2383 \
-  --experiment-id 15823 \
-  --task-id 218419 \
-  --names win_rate \
-  --raw
-```
-
-Custom PromQL expression:
-
-```bash
-node kaiwu-cli/bin/kaiwu.js metric \
-  --domain-type course \
-  --domain-id 2383 \
-  --experiment-id 15823 \
-  --task-id 218419 \
-  --expr 'avg(kaiwu_win_rate{model_id="selfplay"})' \
-  --step 60
-```
-
-Available metric names: `win_rate`, `reward`, `total_loss`, `value_loss`, `policy_loss`, `entropy_loss`, `self_tower_hp`, `enemy_tower_hp`, `frame`, `money_per_frame`, `kill`, `death`, `hurt_by_hero`, `hurt_to_hero`, `predict_succ_cnt`, `train_global_step`, `episode_cnt`, `batch_train_cost_time_ms`, `sample_production_and_consumption_ratio`, and more (37 total).
 
 ### Raw Log API Contract
 

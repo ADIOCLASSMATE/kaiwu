@@ -61,7 +61,7 @@ export default {
     { name: 'task-id', type: 'int', required: true, help: '训练任务 id' },
     ...DOMAIN_ARGS,
     { name: 'team-id', type: 'int', default: 0, help: 'competition team id；course 接口不需要' },
-    { name: 'names', type: 'string', default: '', help: `指标名（逗号分隔），缺省查全部。可用: ${ALL_METRIC_NAMES.join(',')}` },
+    { name: 'names', type: 'string', default: '', help: `指标名（逗号分隔），缺省查全部 37 个平台指标。自定义指标（如 feat_*, rwd_*, entropy_head_* 等）直接传名即可，自动加 kaiwu_ 前缀查询。可用平台指标: ${ALL_METRIC_NAMES.join(',')}` },
     { name: 'expr', type: 'string', default: '', help: '直接传 PromQL 表达式（与 --names 互斥）' },
     { name: 'step', type: 'int', default: 15, help: '采样步长（秒）' },
     { name: 'start', type: 'string', default: '', help: 'ISO8601 起始时间，缺省取 task start_time' },
@@ -96,8 +96,8 @@ export default {
       const wanted = (kwargs.names || '').split(',').map(s => s.trim()).filter(Boolean);
       const list = wanted.length ? wanted : ALL_METRIC_NAMES;
       queries = list.map((n, i) => {
-        const e = METRIC_PROFILES[n];
-        if (!e) throw new Error(`未知指标 ${n}（可用: ${ALL_METRIC_NAMES.join(',')}）`);
+        // 优先用已知 profile，未知指标自动生成: avg(kaiwu_{name}{})
+        const e = METRIC_PROFILES[n] || `avg(kaiwu_${n}{})`;
         return { name: n, expr: e, id: `${n}_${i}`, step: String(kwargs.step) };
       });
     }
