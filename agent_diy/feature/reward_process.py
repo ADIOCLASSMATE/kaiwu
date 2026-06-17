@@ -195,10 +195,14 @@ class GameRewardManager:
     def _record_action_stats(self, action, decided_frame_state):
         if action is None or len(action) < 6:
             return
-        button, target = action[0], action[5]
-        if isinstance(button, int) and 0 <= button < len(self._action_button_counts):
+        try:
+            button = int(action[0])
+            target = int(action[5])
+        except (TypeError, ValueError):
+            return
+        if 0 <= button < len(self._action_button_counts):
             self._action_button_counts[button] += 1
-        if isinstance(target, int) and 0 <= target < len(self._action_target_counts):
+        if 0 <= target < len(self._action_target_counts):
             self._action_target_counts[target] += 1
         bucket = "other"
         if target == 0:
