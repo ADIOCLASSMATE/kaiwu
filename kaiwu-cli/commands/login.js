@@ -47,7 +47,9 @@ export default {
     { name: 'phone', type: 'string', help: '中国大陆手机号（自动加 +86-）' },
     { name: 'email', type: 'string', help: '邮箱（与 --phone 二选一）' },
     { name: 'password', type: 'string', help: '密码 12-20 字符（缺省读 KAIWU_PASSWORD env 或交互输入）' },
-    { name: 'stage-id', type: 'int', default: 446, help: '比赛阶段 id' },
+    { name: 'domain-type', type: 'string', default: 'course', help: '域类型: course / competition_stage' },
+    { name: 'domain-id', type: 'int', default: 0, help: 'course id 或 stage id（默认取 stage-id）' },
+    { name: 'stage-id', type: 'int', default: 446, help: '比赛阶段 id（domain-type=competition_stage 时生效）' },
     { name: 'team-id', type: 'int', default: 8365, help: '队伍 id' },
     { name: 'experiment-id', type: 'int', default: 11427, help: '实验 id' },
     { name: 'no-save-password', type: 'boolean', default: false, help: '不持久化密码（token 过期需重新 login）' },
@@ -86,12 +88,15 @@ export default {
 
     const data = await rawSignIn(creds);
     const payload = jwtPayload(data.token);
+    const domainType = kwargs['domain-type'] || 'course';
+    const domainId = kwargs['domain-id'] || kwargs['stage-id'];
     const session = {
       token: data.token,
       expire_at: data.expire,
       user_id: payload?.custom,
-      domain_type: 'competition_stage',
-      stage_id: kwargs['stage-id'],
+      domain_type: domainType,
+      domain_id: domainId,
+      stage_id: domainId,
       team_id: kwargs['team-id'],
       experiment_id: kwargs['experiment-id'],
     };
