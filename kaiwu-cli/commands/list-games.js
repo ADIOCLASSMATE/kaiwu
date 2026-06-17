@@ -1,4 +1,4 @@
-import { api, withCtx, loadSession } from '../_session.js';
+import { api, contextFromArgs, apiPrefix, DOMAIN_ARGS, loadSession } from '../_session.js';
 
 export default {
   name: 'list-games',
@@ -7,14 +7,17 @@ export default {
   domain: 'tencentarena.com',
   args: [
     { name: 'battle-task-id', type: 'int', required: true, help: 'battle_task id（list-battle-tasks 看到的）' },
+    ...DOMAIN_ARGS,
     { name: 'limit', type: 'int', default: 10, help: 'page.size' },
     { name: 'page', type: 'int', default: 1, help: 'page.current' },
   ],
   columns: ['id', 'name', 'status', 'winner', 'a_kill', 'a_dead', 'a_lineup', 'b_kill', 'b_dead', 'b_lineup'],
   run: async (kwargs) => {
     const session = await loadSession();
-    const data = await api('/api/v5/Competition/ListGame',
-      withCtx(session, { battle_task_id: kwargs['battle-task-id'], page: { current: kwargs.page, size: kwargs.limit } }),
+    const ctx = contextFromArgs(session, kwargs);
+    const prefix = apiPrefix(ctx);
+    const data = await api(`${prefix}/ListGame`,
+      { ...ctx,  battle_task_id: kwargs['battle-task-id'], page: { current: kwargs.page, size: kwargs.limit } },
       { session });
     const games = data.game || [];
     return games.map(g => {

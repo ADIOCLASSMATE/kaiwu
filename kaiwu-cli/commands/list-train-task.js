@@ -1,4 +1,4 @@
-import { api, withCtx, loadSession } from '../_session.js';
+import { api, contextFromArgs, apiPrefix, DOMAIN_ARGS, loadSession } from '../_session.js';
 
 export default {
   name: 'list-train-task',
@@ -7,6 +7,7 @@ export default {
   domain: 'tencentarena.com',
   args: [
     { name: 'limit', type: 'int', default: 10, help: '返回任务数（page.size）' },
+    ...DOMAIN_ARGS,
     { name: 'page', type: 'int', default: 1, help: '页码（page.current）' },
     { name: 'name', type: 'string', default: '', help: '按任务名筛选（模糊）' },
     { name: 'status', type: 'string', default: '', help: '按状态筛选: running / failed / manual_release / finished 等' },
@@ -14,12 +15,14 @@ export default {
   columns: ['id', 'name', 'status', 'algorithm', 'runtime', 'created_at', 'monitor'],
   run: async (kwargs) => {
     const session = await loadSession();
-    const body = withCtx(session, {
+    const ctx = contextFromArgs(session, kwargs);
+    const prefix = apiPrefix(ctx);
+    const body = { ...ctx, 
       page: { current: kwargs.page, size: kwargs.limit },
-    });
+    };
     if (kwargs.name) body.name = kwargs.name;
     if (kwargs.status) body.status = kwargs.status;
-    const data = await api('/api/v5/Competition/ListTrainTask', body, { session });
+    const data = await api(`${prefix}/ListTrainTask`, body, { session });
     const tasks = data.train_task || [];
     return tasks.map(t => ({
       id: t.id,

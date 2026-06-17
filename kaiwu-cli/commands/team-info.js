@@ -1,4 +1,4 @@
-import { api, withCtx, loadSession } from '../_session.js';
+import { api, contextFromArgs, apiPrefix, loadSession } from '../_session.js';
 
 export default {
   name: 'team-info',
@@ -7,9 +7,11 @@ export default {
   domain: 'tencentarena.com',
   args: [],
   columns: ['key', 'value'],
-  run: async () => {
+  run: async (kwargs) => {
     const session = await loadSession();
-    const data = await api('/api/v5/Competition/GetCompetitionTeam', withCtx(session), { session });
+    const ctx = contextFromArgs(session, kwargs);
+    const prefix = apiPrefix(ctx);
+    const data = await api(`${prefix}/GetCompetitionTeam`, ctx, { session });
     const t = data.competition_team || {};
     const members = (t.team_members || []).map(m =>
       `${m.real_name || '(未填名)'}/${m.role_code || '-'}/${m.degree?.school || '-'}`

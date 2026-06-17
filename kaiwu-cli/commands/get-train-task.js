@@ -1,4 +1,4 @@
-import { api, withCtx, loadSession } from '../_session.js';
+import { api, contextFromArgs, apiPrefix, DOMAIN_ARGS, loadSession } from '../_session.js';
 
 export default {
   name: 'get-train-task',
@@ -7,21 +7,24 @@ export default {
   domain: 'tencentarena.com',
   args: [
     { name: 'uuid', type: 'string', required: false, help: '任务 UUID（list-train-task 返回的 uuid 字段）' },
+    ...DOMAIN_ARGS,
     { name: 'task-id', type: 'int', required: false, help: '任务 ID（自动从 list-train-task 反查 uuid）' },
   ],
   columns: ['key', 'value'],
   run: async (kwargs) => {
     const session = await loadSession();
+    const ctx = contextFromArgs(session, kwargs);
+    const prefix = apiPrefix(ctx);
     let uuid = kwargs.uuid;
     if (!uuid && kwargs['task-id']) {
-      const list = await api('/api/v5/Competition/ListTrainTask',
-        withCtx(session, { page: { current: 1, size: 50 } }), { session });
+      const list = await api(`${prefix}/ListTrainTask`,
+        { ...ctx,  page: { current: 1, size: 50 } }, { session });
       const t = (list.train_task || []).find(x => x.id === kwargs['task-id']);
       if (!t) throw new Error(`task-id=${kwargs['task-id']} 在最近 50 条任务中未找到`);
       uuid = t.uuid;
     }
     if (!uuid) throw new Error('--uuid 或 --task-id 至少给一个');
-    const data = await api('/api/v5/Competition/GetTrainTask', withCtx(session, { uuid }), { session });
+    const data = await api(`${prefix}/GetTrainTask`, { ...ctx,  uuid }, { session });
     const t = data.task || {};
     const fmt = (s) => `${Math.floor((s || 0) / 60)}min`;
     return [

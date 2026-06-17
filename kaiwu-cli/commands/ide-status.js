@@ -1,4 +1,4 @@
-import { api, withCtx, loadSession } from '../_session.js';
+import { api, contextFromArgs, apiPrefix, loadSession } from '../_session.js';
 
 export default {
   name: 'ide-status',
@@ -7,9 +7,11 @@ export default {
   domain: 'tencentarena.com',
   args: [],
   columns: ['key', 'value'],
-  run: async () => {
+  run: async (kwargs) => {
     const session = await loadSession();
-    const data = await api('/api/v5/Competition/GetWebIDE',
+    const ctx = contextFromArgs(session, kwargs);
+    const prefix = apiPrefix(ctx);
+    const data = await api(`${prefix}/GetWebIDE`,
       { domain: { id: session.stage_id, type: session.domain_type }, experiment_id: session.experiment_id },
       { session });
     const fmt = (s) => {

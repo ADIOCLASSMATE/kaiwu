@@ -1,4 +1,4 @@
-import { api, withCtx, loadSession } from '../_session.js';
+import { api, contextFromArgs, apiPrefix, DOMAIN_ARGS, loadSession } from '../_session.js';
 
 // metric_name -> PromQL expr 模板（2026-05-08 通过 group by (__name__) 实测拿到 37 个真名，修正所有 expr）
 const METRIC_PROFILES = {
@@ -59,6 +59,8 @@ export default {
   domain: 'tencentarena.com',
   args: [
     { name: 'task-id', type: 'int', required: true, help: '训练任务 id' },
+    ...DOMAIN_ARGS,
+    { name: 'team-id', type: 'int', default: 0, help: 'competition team id；course 接口不需要' },
     { name: 'names', type: 'string', default: '', help: `指标名（逗号分隔），缺省查全部。可用: ${ALL_METRIC_NAMES.join(',')}` },
     { name: 'expr', type: 'string', default: '', help: '直接传 PromQL 表达式（与 --names 互斥）' },
     { name: 'step', type: 'int', default: 15, help: '采样步长（秒）' },
@@ -70,14 +72,16 @@ export default {
   columns: ['name', 'has_data', 'points', 'min', 'max', 'last', 'expr'],
   run: async (kwargs) => {
     const session = await loadSession();
+    const ctx = contextFromArgs(session, kwargs);
+    const prefix = apiPrefix(ctx);
     const taskId = kwargs['task-id'];
 
     // 取 task start/end
     let startISO = kwargs.start;
     let endISO = kwargs.end;
     if (!startISO || !endISO) {
-      const list = await api('/api/v5/Competition/ListTrainTask',
-        withCtx(session, { page: { current: 1, size: 50 } }), { session });
+      const list = await api(`${prefix}/ListTrainTask`,
+        { ...ctx, page: { current: 1, size: 50 } }, { session });
       const t = (list.train_task || []).find(x => x.id === taskId);
       if (!t) throw new Error(`task-id=${taskId} 不在最近 50 条任务里`);
       startISO = startISO || t.start_time;
@@ -99,13 +103,14 @@ export default {
     }
 
     // 一次性多 query 调用
-    const body = withCtx(session, {
+    const body = {
+      ...ctx,
       train_task_id: taskId,
       start_time: { timestamp: startISO },
       end_time: { timestamp: endISO },
       queries,
-    });
-    const data = await api('/api/v5/Competition/GetTrainMetricRange', body, { session });
+    };
+    const data = await api(`${prefix}/GetTrainMetricRange`, body, { session });
 
     const idx2name = Object.fromEntries(queries.map(q => [q.id, q.name]));
     const exprMap = Object.fromEntries(queries.map(q => [q.name, q.expr]));

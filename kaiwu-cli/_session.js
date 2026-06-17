@@ -184,5 +184,31 @@ export function withCtx(session, extra = {}) {
   };
 }
 
+// 从命令行参数构建请求上下文（body.domain / experiment_id / competition_team_id）
+export function contextFromArgs(session, kwargs) {
+  const domainType = kwargs['domain-type'] || session.domain_type || 'competition_stage';
+  const domainId = kwargs['domain-id'] || session.stage_id;
+  const experimentId = kwargs['experiment-id'] || session.experiment_id;
+  const teamId = kwargs['team-id'] || session.team_id;
+  const body = {
+    domain: { type: domainType, id: domainId },
+    experiment_id: experimentId,
+  };
+  if (domainType !== 'course' && teamId) body.competition_team_id = teamId;
+  return body;
+}
+
+// 根据上下文返回 API 前缀：course 域用 /api/v5/Course，否则用 /api/v5/Competition
+export function apiPrefix(ctx) {
+  return ctx.domain?.type === 'course' ? '/api/v5/Course' : '/api/v5/Competition';
+}
+
+// 通用 domain/experiment 参数定义，供各命令 args 复用
+export const DOMAIN_ARGS = [
+  { name: 'domain-type', type: 'string', default: '', help: 'course / competition_stage；默认使用 session' },
+  { name: 'domain-id', type: 'int', default: 0, help: 'course id 或 stage id；默认使用 session.stage_id' },
+  { name: 'experiment-id', type: 'int', default: 0, help: '实验 id；默认使用 session.experiment_id' },
+];
+
 export { rawSignIn };
 export const BASE_URL = BASE;

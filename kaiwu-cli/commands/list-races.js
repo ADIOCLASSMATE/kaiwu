@@ -1,4 +1,4 @@
-import { api, withCtx, loadSession } from '../_session.js';
+import { api, contextFromArgs, apiPrefix, DOMAIN_ARGS, loadSession } from '../_session.js';
 
 export default {
   name: 'list-races',
@@ -7,13 +7,16 @@ export default {
   domain: 'tencentarena.com',
   args: [
     { name: 'limit', type: 'int', default: 10, help: 'page.size' },
+    ...DOMAIN_ARGS,
     { name: 'page', type: 'int', default: 1, help: 'page.current' },
   ],
   columns: ['id', 'name', 'status', 'rule', 'created_at'],
   run: async (kwargs) => {
     const session = await loadSession();
-    const data = await api('/api/v5/Competition/ListRace',
-      withCtx(session, { page: { current: kwargs.page, size: kwargs.limit } }), { session });
+    const ctx = contextFromArgs(session, kwargs);
+    const prefix = apiPrefix(ctx);
+    const data = await api(`${prefix}/ListRace`,
+      { ...ctx,  page: { current: kwargs.page, size: kwargs.limit } }, { session });
     const rows = (data.race || []).map(r => ({
       id: r.id,
       name: r.name,

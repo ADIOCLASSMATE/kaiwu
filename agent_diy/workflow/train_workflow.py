@@ -142,6 +142,19 @@ class EpisodeRunner:
         self.logger.info(f"train opponent selected: {selected}")
         return selected
 
+    def _prepare_episode_opponent(self, usr_conf, is_eval, is_train_test):
+        episode_conf = usr_conf.setdefault("episode", {})
+        configured_opponent_agent = (
+            episode_conf.get("opponent_agent") or self.env_conf_manager.get_opponent_agent()
+        )
+        opponent_agent = self._select_train_opponent_agent(
+            configured_opponent_agent,
+            is_eval,
+            is_train_test,
+        )
+        episode_conf["opponent_agent"] = opponent_agent
+        return opponent_agent
+
     def _call_init_config(self, usr_conf):
         """Call init_config on both agents to get summoner skill selections,
         then inject the results into usr_conf.
@@ -243,6 +256,12 @@ class EpisodeRunner:
             # 更新对局配置, 可以用长度为2的列表传入当前对局的阵容id
             lineup = next(self.lineup_iterator)
             usr_conf, is_eval, monitor_side = self.env_conf_manager.update_config(lineup)
+            is_train_test = os.environ.get("is_train_test", "False").lower() == "true"
+            opponent_agent = self._prepare_episode_opponent(
+                usr_conf,
+                is_eval,
+                is_train_test,
+            )
 
             # Call init_config on agents to get summoner skill selections
             # 调用 agent 的 init_config 获取召唤师技能选择，注入 usr_conf
@@ -262,7 +281,7 @@ class EpisodeRunner:
 
             # Reset agents
             # 重置智能体
-            self.reset_agents(observation, is_eval=is_eval)
+            self.reset_agents(observation, opponent_agent=opponent_agent, is_eval=is_eval)
 
             # Reset environment frame collector
             # 重置环境帧收集器
@@ -273,7 +292,6 @@ class EpisodeRunner:
             self.episode_cnt += 1
             frame_no = 0
             reward_sum_list = [0] * self.agent_num
-            is_train_test = os.environ.get("is_train_test", "False").lower() == "true"
             self.logger.info(f"Episode {self.episode_cnt} start, usr_conf is {usr_conf}")
 
             # ---- 监控统计累加器（仅追踪 monitor_side，按局聚合）----
@@ -422,15 +440,9 @@ class EpisodeRunner:
                         yield list_agents_samples
                     break
 
-    def reset_agents(self, observation, is_eval=False):
-        configured_opponent_agent = self.env_conf_manager.get_opponent_agent()
+    def reset_agents(self, observation, opponent_agent, is_eval=False):
         monitor_side = self.env_conf_manager.get_monitor_side()
         is_train_test = os.environ.get("is_train_test", "False").lower() == "true"
-        opponent_agent = self._select_train_opponent_agent(
-            configured_opponent_agent,
-            is_eval,
-            is_train_test,
-        )
 
         # The 'do_predicts' specifies which agents are to perform model predictions.
         # do_predicts 指定哪些智能体要进行模型预测
@@ -462,6 +474,7 @@ class EpisodeRunner:
                         f"selfplay opponent loads model_id={opponent_model_id}, eval={is_eval}"
                     )
                     agent.load_model(id=opponent_model_id)
+                    self.do_samples[i] = False
                 else:
                     # Opponent model, model_id is checked from kaiwu.json
                     # 选择kaiwu.json中设置的对手模型, model_id 即 opponent_agent，必须设置正确否则报错

@@ -1,4 +1,4 @@
-import { api, withCtx, loadSession } from '../_session.js';
+import { api, contextFromArgs, apiPrefix, DOMAIN_ARGS, loadSession } from '../_session.js';
 
 export default {
   name: 'stop-battle-task',
@@ -7,11 +7,14 @@ export default {
   domain: 'tencentarena.com',
   args: [
     { name: 'id', type: 'int', required: true, help: 'battle_task id' },
+    ...DOMAIN_ARGS,
   ],
   columns: ['key', 'value'],
   run: async (kwargs) => {
     const session = await loadSession();
-    await api('/api/v5/Competition/StopBattleTask', withCtx(session, { id: kwargs.id }), { session });
+    const ctx = contextFromArgs(session, kwargs);
+    const prefix = apiPrefix(ctx);
+    await api(`${prefix}/StopBattleTask`, { ...ctx,  id: kwargs.id }, { session });
     return [
       { key: 'battle_task_id', value: kwargs.id },
       { key: 'result', value: 'terminated' },

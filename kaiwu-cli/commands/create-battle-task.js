@@ -1,4 +1,4 @@
-import { api, withCtx, loadSession } from '../_session.js';
+import { api, contextFromArgs, apiPrefix, DOMAIN_ARGS, loadSession } from '../_session.js';
 
 export default {
   name: 'create-battle-task',
@@ -7,6 +7,7 @@ export default {
   domain: 'tencentarena.com',
   args: [
     { name: 'name', type: 'string', required: true, help: '对战任务名' },
+    ...DOMAIN_ARGS,
     { name: 'camp-a', type: 'int', required: true, help: 'A 方 ai_model_id（list-ai-models 的 id）' },
     { name: 'camp-b', type: 'int', required: true, help: 'B 方 ai_model_id' },
     { name: 'round', type: 'int', default: 5, help: '对战轮次（每轮通常含 8 局）' },
@@ -21,6 +22,8 @@ export default {
   columns: ['key', 'value'],
   run: async (kwargs) => {
     const session = await loadSession();
+    const ctx = contextFromArgs(session, kwargs);
+    const prefix = apiPrefix(ctx);
     if (!['user', 'team', 'experiment'].includes(kwargs.share)) {
       throw new Error(`--share 必须是 user/team/experiment，收到: ${kwargs.share}`);
     }
@@ -34,23 +37,23 @@ export default {
       buildCamp(kwargs['camp-a'], kwargs['hero-a'], kwargs['summoner-a']),
       buildCamp(kwargs['camp-b'], kwargs['hero-b'], kwargs['summoner-b']),
     ];
-    const body = withCtx(session, {
+    const body = { ...ctx, 
       name: kwargs.name,
       share_type: kwargs.share,
       round: kwargs.round,
       camp,
-    });
+    };
     const reallyDo = kwargs.yes || kwargs['dry-run'] === false;
     if (!reallyDo) {
       return [
         { key: 'mode', value: 'DRY-RUN（默认）。加 --yes 真创建' },
         { key: 'method', value: 'POST' },
-        { key: 'url', value: '/api/v5/Competition/CreateBattleTask' },
+        { key: 'url', value: `${prefix}/CreateBattleTask` },
         { key: 'body', value: JSON.stringify(body, null, 2) },
         { key: 'estimated_games', value: kwargs.round * 8 },
       ];
     }
-    const data = await api('/api/v5/Competition/CreateBattleTask', body, { session });
+    const data = await api(`${prefix}/CreateBattleTask`, body, { session });
     return [
       { key: 'mode', value: 'REAL' },
       { key: 'battle_task_id', value: data.id },

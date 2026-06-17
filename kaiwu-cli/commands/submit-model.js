@@ -1,4 +1,4 @@
-import { api, withCtx, loadSession } from '../_session.js';
+import { api, contextFromArgs, apiPrefix, DOMAIN_ARGS, loadSession } from '../_session.js';
 
 export default {
   name: 'submit-model',
@@ -7,6 +7,7 @@ export default {
   domain: 'tencentarena.com',
   args: [
     { name: 'task-id', type: 'int', required: true, help: '训练任务 id（list-train-task 的 id 字段）' },
+    ...DOMAIN_ARGS,
     { name: 'train-step', type: 'int', required: false, help: '指定 checkpoint 的 train_step；与 --latest 二选一' },
     { name: 'latest', type: 'boolean', default: false, help: '自动选 task 最新 checkpoint（按 train_step 最大）' },
     { name: 'name', type: 'string', default: '', help: '模型名（默认 auto-{taskid}-{step}，最长 20 字符）' },
@@ -19,6 +20,8 @@ export default {
   columns: ['key', 'value'],
   run: async (kwargs) => {
     const session = await loadSession();
+    const ctx = contextFromArgs(session, kwargs);
+    const prefix = apiPrefix(ctx);
     const taskId = kwargs['task-id'];
     if (!kwargs.latest && kwargs['train-step'] === undefined) {
       throw new Error('--train-step 或 --latest 至少给一个');
@@ -28,8 +31,8 @@ export default {
     }
 
     // 拿 checkpoint
-    const modelsResp = await api('/api/v5/Competition/ListTrainAiModel',
-      withCtx(session, { train_task_id: taskId }), { session });
+    const modelsResp = await api(`${prefix}/ListTrainAiModel`,
+      { ...ctx,  train_task_id: taskId }, { session });
     const ckpts = modelsResp.ai_models || [];
     if (!ckpts.length) throw new Error(`task ${taskId} 没有 checkpoint，无法提交`);
     let ck;
@@ -68,19 +71,19 @@ export default {
       desc: kwargs.desc || '',
       share_type: kwargs.share,
       file,
-      ...withCtx(session),
+      ...ctx,
     };
 
     if (kwargs['dry-run']) {
       return [
         { key: 'method', value: 'POST' },
-        { key: 'url', value: '/api/v5/Competition/CreateAiModel' },
+        { key: 'url', value: `${prefix}/CreateAiModel` },
         { key: 'body', value: JSON.stringify(body, null, 2) },
         { key: 'note', value: '加 --no-dry-run 真提交' },
       ];
     }
 
-    const resp = await api('/api/v5/Competition/CreateAiModel', body, { session });
+    const resp = await api(`${prefix}/CreateAiModel`, body, { session });
     return [
       { key: 'ai_model_id', value: resp.id },
       { key: 'name', value: name },

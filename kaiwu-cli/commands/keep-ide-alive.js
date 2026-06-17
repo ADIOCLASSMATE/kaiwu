@@ -1,4 +1,4 @@
-import { api, loadSession } from '../_session.js';
+import { api, contextFromArgs, apiPrefix, loadSession } from '../_session.js';
 
 function fmtDur(sec) {
   const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
@@ -9,17 +9,15 @@ function ts() {
   return new Date().toISOString().replace('T', ' ').slice(0, 19);
 }
 
-async function getStatus(session) {
-  return api('/api/v5/Competition/GetWebIDE',
-    { domain: { id: session.stage_id, type: session.domain_type }, experiment_id: session.experiment_id },
+async function getStatus(session, ctx, prefix) {
+  return api(`${prefix}/GetWebIDE`,
+    { ...ctx },
     { session });
 }
 
-async function startIDE(session, cur) {
-  return api('/api/v5/Competition/StartWebIDE', {
-    domain: { id: session.stage_id, type: session.domain_type },
-    experiment_id: session.experiment_id,
-    competition_team_id: session.team_id,
+async function startIDE(session, cur, ctx, prefix) {
+  return api(`${prefix}/StartWebIDE`, {
+    ...ctx,
     cluster_config_id: cur.cluster_config_id,
     project: cur.project,
   }, { session });
@@ -37,6 +35,8 @@ export default {
   columns: ['key', 'value'],
   run: async (kwargs) => {
     const session = await loadSession();
+    const ctx = contextFromArgs(session, kwargs);
+    const prefix = apiPrefix(ctx);
     const interval = Math.max(10, kwargs.interval);
     const maxLoops = kwargs['max-loops'];
     const verbose = kwargs['log-every-poll'];
@@ -51,7 +51,7 @@ export default {
     while (maxLoops === 0 || loopCount < maxLoops) {
       loopCount++;
       try {
-        const cur = await getStatus(session);
+        const cur = await getStatus(session, ctx, prefix);
         const statusChanged = cur.status !== lastStatus;
         const deployChanged = lastDeployAt && cur.deploy_at !== lastDeployAt;
 
@@ -63,7 +63,7 @@ export default {
         if (cur.status !== 'running') {
           console.error(`[${ts()}] IDE not running (status=${cur.status})，触发 StartWebIDE`);
           try {
-            const r = await startIDE(session, cur);
+            const r = await startIDE(session, cur, ctx, prefix);
             restartCount++;
             console.error(`[${ts()}] StartWebIDE OK (第 ${restartCount} 次自动重启) response=${JSON.stringify(r).slice(0, 200)}`);
             console.error(`[${ts()}] 提醒：env_agent 中转通道断了。打开 IDE 网页一次让 .vscode/tasks.json 自动起 start-env-agent.sh`);

@@ -1,4 +1,4 @@
-import { api, withCtx, loadSession } from '../_session.js';
+import { api, contextFromArgs, apiPrefix, loadSession } from '../_session.js';
 
 export default {
   name: 'resource-stat',
@@ -7,9 +7,11 @@ export default {
   domain: 'tencentarena.com',
   args: [],
   columns: ['module', 'key', 'quota'],
-  run: async () => {
+  run: async (kwargs) => {
     const session = await loadSession();
-    const data = await api('/api/v5/Competition/GetResourceStat', withCtx(session), { session });
+    const ctx = contextFromArgs(session, kwargs);
+    const prefix = apiPrefix(ctx);
+    const data = await api(`${prefix}/GetResourceStat`, ctx, { session });
     const rows = [];
     const pack = (data.stat?.pack || [])[0]?.resource_module || {};
     for (const [mod, cfg] of Object.entries(pack)) {

@@ -1,4 +1,4 @@
-import { api, withCtx, loadSession } from '../_session.js';
+import { api, contextFromArgs, apiPrefix, DOMAIN_ARGS, loadSession } from '../_session.js';
 
 export default {
   name: 'list-battle-tasks',
@@ -7,6 +7,7 @@ export default {
   domain: 'tencentarena.com',
   args: [
     { name: 'owner-type', type: 'string', default: 'battle', help: 'owner.type，默认 battle 看用户自己创建的' },
+    ...DOMAIN_ARGS,
     { name: 'owner-id', type: 'int', default: 0, help: 'owner.id，battle 域默认 0' },
     { name: 'limit', type: 'int', default: 10, help: 'page.size' },
     { name: 'page', type: 'int', default: 1, help: 'page.current' },
@@ -14,11 +15,13 @@ export default {
   columns: ['id', 'name', 'status', 'round', 'game_count', 'created_at'],
   run: async (kwargs) => {
     const session = await loadSession();
-    const data = await api('/api/v5/Competition/ListBattleTask',
-      withCtx(session, {
+    const ctx = contextFromArgs(session, kwargs);
+    const prefix = apiPrefix(ctx);
+    const data = await api(`${prefix}/ListBattleTask`,
+      { ...ctx, 
         owner: { type: kwargs['owner-type'], id: kwargs['owner-id'] },
         page: { current: kwargs.page, size: kwargs.limit },
-      }), { session });
+      }, { session });
     const rows = (data.battle_task || []).map(b => ({
       id: b.id,
       name: b.name,

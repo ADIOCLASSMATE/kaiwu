@@ -2,12 +2,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
-import { api, withCtx } from './_session.js';
+import { api, apiPrefix } from './_session.js';
 
 // 调 GetAuthDownloadURL 拿 cos presigned url
-export async function getAuthDownloadURL(session, fileKey, source) {
-  const r = await api('/api/v5/Competition/GetAuthDownloadURL',
-    withCtx(session, { file_key: fileKey, include: [], download_source: source }),
+export async function getAuthDownloadURL(session, ctx, fileKey, source) {
+  const prefix = apiPrefix(ctx);
+  const r = await api(`${prefix}/GetAuthDownloadURL`,
+    { ...ctx, file_key: fileKey, include: [], download_source: source },
     { session });
   if (!r?.url) throw new Error(`GetAuthDownloadURL 没返回 url: ${JSON.stringify(r).slice(0, 200)}`);
   return r;
@@ -24,8 +25,8 @@ export async function downloadToFile(url, outputPath) {
 }
 
 // 一步到位：拿 url + 落盘
-export async function authDownloadAndSave(session, fileKey, source, outputPath) {
-  const dl = await getAuthDownloadURL(session, fileKey, source);
+export async function authDownloadAndSave(session, ctx, fileKey, source, outputPath) {
+  const dl = await getAuthDownloadURL(session, ctx, fileKey, source);
   const { path: outPath, size } = await downloadToFile(dl.url, outputPath);
   return { url: dl.url, output: outPath, size_mb: (size / 1048576).toFixed(2) };
 }

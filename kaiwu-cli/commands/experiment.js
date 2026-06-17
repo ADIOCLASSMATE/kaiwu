@@ -1,4 +1,4 @@
-import { api, loadSession } from '../_session.js';
+import { api, contextFromArgs, apiPrefix, DOMAIN_ARGS, loadSession } from '../_session.js';
 
 export default {
   name: 'experiment',
@@ -7,11 +7,14 @@ export default {
   domain: 'tencentarena.com',
   args: [
     { name: 'full', type: 'boolean', default: false, help: '展开完整 JSON' },
+    ...DOMAIN_ARGS,
   ],
   columns: ['key', 'value'],
   run: async (kwargs) => {
     const session = await loadSession();
-    const data = await api('/api/v5/Competition/GetExperimentHistory',
+    const ctx = contextFromArgs(session, kwargs);
+    const prefix = apiPrefix(ctx);
+    const data = await api(`${prefix}/GetExperimentHistory`,
       { domain: { id: session.stage_id, type: session.domain_type }, experiment_id: session.experiment_id },
       { session });
     const eh = data.experiment_history || {};

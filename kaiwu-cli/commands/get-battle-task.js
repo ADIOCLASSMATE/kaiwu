@@ -1,4 +1,4 @@
-import { api, withCtx, loadSession } from '../_session.js';
+import { api, contextFromArgs, apiPrefix, DOMAIN_ARGS, loadSession } from '../_session.js';
 
 // 解析 camp.end_info（聚合后的 JSON 字符串），提取 win/kill/death/kda 等核心评估数据
 function parseEndInfo(s) {
@@ -45,11 +45,14 @@ export default {
   domain: 'tencentarena.com',
   args: [
     { name: 'id', type: 'int', required: true, help: 'battle_task id' },
+    ...DOMAIN_ARGS,
   ],
   columns: ['key', 'value'],
   run: async (kwargs) => {
     const session = await loadSession();
-    const data = await api('/api/v5/Competition/GetBattleTask', withCtx(session, { id: kwargs.id }), { session });
+    const ctx = contextFromArgs(session, kwargs);
+    const prefix = apiPrefix(ctx);
+    const data = await api(`${prefix}/GetBattleTask`, { ...ctx,  id: kwargs.id }, { session });
     const bt = data.battle_task || {};
     const camps = bt.camp || [];
     const summary = camps.map((c, i) => {

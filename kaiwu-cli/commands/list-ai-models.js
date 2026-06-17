@@ -1,4 +1,4 @@
-import { api, withCtx, loadSession } from '../_session.js';
+import { api, contextFromArgs, apiPrefix, DOMAIN_ARGS, loadSession } from '../_session.js';
 
 export default {
   name: 'list-ai-models',
@@ -7,15 +7,18 @@ export default {
   domain: 'tencentarena.com',
   args: [
     { name: 'limit', type: 'int', default: 10, help: 'page.size' },
+    ...DOMAIN_ARGS,
     { name: 'page', type: 'int', default: 1, help: 'page.current' },
     { name: 'name', type: 'string', default: '', help: '名称模糊筛选' },
   ],
   columns: ['id', 'name', 'status', 'algorithm', 'train_step', 'train_time', 'created_at'],
   run: async (kwargs) => {
     const session = await loadSession();
-    const body = withCtx(session, { page: { current: kwargs.page, size: kwargs.limit } });
+    const ctx = contextFromArgs(session, kwargs);
+    const prefix = apiPrefix(ctx);
+    const body = { ...ctx,  page: { current: kwargs.page, size: kwargs.limit } };
     if (kwargs.name) body.name = kwargs.name;
-    const data = await api('/api/v5/Competition/ListAiModel', body, { session });
+    const data = await api(`${prefix}/ListAiModel`, body, { session });
     return (data.ai_model || []).map(m => ({
       id: m.id,
       name: m.name,

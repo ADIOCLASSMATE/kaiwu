@@ -123,6 +123,7 @@ class RewardDesignTests(unittest.TestCase):
             {
                 "tower_hp_point",
                 "lane_progress",
+                "retreat_recover",
                 "hp_point",
                 "danger_penalty",
                 "kill",
@@ -390,7 +391,7 @@ class RewardDesignTests(unittest.TestCase):
         self.assertAlmostEqual(reward["minion_hp_point"], -0.2)
         self.assertAlmostEqual(
             reward["minion_hp_point"] * GameConfig.REWARD_WEIGHT_DICT["minion_hp_point"],
-            -0.02,
+            -0.08,
         )
 
     def test_minion_hp_point_ignores_non_hero_lane_damage_to_own_minions(self):
@@ -425,7 +426,7 @@ class RewardDesignTests(unittest.TestCase):
 
         self.assertEqual(reward["last_hit"], -1.0)
 
-    def test_full_hp_lane_guidance_decays_from_fountain_to_own_cake_then_center(self):
+    def test_lane_guidance_rewards_safe_forward_progress_only_until_own_cake(self):
         cakes = [
             make_cake(-15200, 0),
             make_cake(15200, 0),
@@ -434,14 +435,14 @@ class RewardDesignTests(unittest.TestCase):
             main=make_hero(MAIN_ID, 1, hp=1000, x=-23000),
             cakes=cakes,
         )
-        own_cake = make_frame(
+        halfway_to_cake = make_frame(
             frame_no=1,
-            main=make_hero(MAIN_ID, 1, hp=1000, x=-15200),
+            main=make_hero(MAIN_ID, 1, hp=1000, x=-19100),
             cakes=cakes,
         )
-        between_cake_and_center = make_frame(
+        own_cake = make_frame(
             frame_no=2,
-            main=make_hero(MAIN_ID, 1, hp=1000, x=-7600),
+            main=make_hero(MAIN_ID, 1, hp=1000, x=-15200),
             cakes=cakes,
         )
         center = make_frame(
@@ -451,30 +452,132 @@ class RewardDesignTests(unittest.TestCase):
         )
 
         fountain_reward = self.manager.result(fountain)
+        halfway_reward = self.manager.result(halfway_to_cake)
         cake_reward = self.manager.result(own_cake)
-        weak_reward = self.manager.result(between_cake_and_center)
         center_reward = self.manager.result(center)
 
-        self.assertAlmostEqual(fountain_reward["lane_progress"], 1.0)
-        self.assertLess(cake_reward["lane_progress"], 0.06)
+        self.assertAlmostEqual(fountain_reward["lane_progress"], 0.0)
+        self.assertGreater(halfway_reward["lane_progress"], 0.0)
         self.assertGreater(cake_reward["lane_progress"], 0.0)
-        self.assertLess(weak_reward["lane_progress"], cake_reward["lane_progress"])
-        self.assertGreater(weak_reward["lane_progress"], 0.0)
         self.assertEqual(center_reward["lane_progress"], 0.0)
 
         lane_weight = GameConfig.REWARD_WEIGHT_DICT["lane_progress"]
-        self.assertLess(fountain_reward["lane_progress"] * lane_weight, 0.0)
+        self.assertGreater(halfway_reward["lane_progress"] * lane_weight, 0.0)
+        self.assertLessEqual(
+            halfway_reward["lane_progress"] + cake_reward["lane_progress"],
+            GameConfig.LANE_PROGRESS_MAX_PER_EPISODE,
+        )
 
-    def test_lane_guidance_only_applies_at_near_full_hp(self):
+    def test_lane_guidance_does_not_punish_recall_recovery_or_low_hp(self):
         cakes = [make_cake(-15200, 0)]
         low_hp_fountain = make_frame(
-            main=make_hero(MAIN_ID, 1, hp=980, max_hp=1000, x=-23000),
+            main=make_hero(MAIN_ID, 1, hp=300, max_hp=1000, x=-23000),
+            cakes=cakes,
+        )
+        recovered_fountain = make_frame(
+            frame_no=1,
+            main=make_hero(MAIN_ID, 1, hp=1000, max_hp=1000, x=-23000),
             cakes=cakes,
         )
 
-        reward = self.manager.result(low_hp_fountain)
+        low_hp_reward = self.manager.result(low_hp_fountain)
+        recovered_reward = self.manager.result(recovered_fountain)
 
-        self.assertEqual(reward["lane_progress"], 0.0)
+        self.assertEqual(low_hp_reward["lane_progress"], 0.0)
+        self.assertEqual(recovered_reward["lane_progress"], 0.0)
+
+    def test_lane_guidance_is_disabled_under_visible_enemy_threat(self):
+        cakes = [make_cake(-15200, 0)]
+        threatened = make_frame(
+            main=make_hero(MAIN_ID, 1, hp=800, max_hp=1000, x=-19100),
+            enemy=make_hero(ENEMY_ID, 2, hp=1000, max_hp=1000, attack_range=5000, x=-16000),
+            cakes=cakes,
+        )
+        safer = make_frame(
+            frame_no=1,
+            main=make_hero(MAIN_ID, 1, hp=800, max_hp=1000, x=-15200),
+            enemy=make_hero(ENEMY_ID, 2, hp=1000, max_hp=1000, attack_range=5000, x=10000),
+            cakes=cakes,
+        )
+
+        threatened_reward = self.manager.result(threatened)
+        safer_reward = self.manager.result(safer)
+
+        self.assertEqual(threatened_reward["lane_progress"], 0.0)
+        self.assertGreater(safer_reward["lane_progress"], 0.0)
+
+    def test_retreat_recover_is_small_positive_but_not_a_frontline_profit_source(self):
+        danger = make_frame(
+            main=make_hero(MAIN_ID, 1, hp=300, max_hp=1000, x=0),
+            enemy=make_hero(ENEMY_ID, 2, hp=1000, max_hp=1000, attack_range=5000, x=3000),
+        )
+        retreating = make_frame(
+            frame_no=1,
+            main=make_hero(MAIN_ID, 1, hp=300, max_hp=1000, x=-3000),
+            enemy=make_hero(ENEMY_ID, 2, hp=1000, max_hp=1000, attack_range=5000, x=1000),
+        )
+        recovering = make_frame(
+            frame_no=2,
+            main=make_hero(MAIN_ID, 1, hp=600, max_hp=1000, x=-23000),
+            enemy=make_hero(ENEMY_ID, 2, hp=1000, max_hp=1000, attack_range=5000, x=10000),
+        )
+
+        self.manager.result(danger)
+        retreat_reward = self.manager.result(retreating)
+        recover_reward = self.manager.result(recovering)
+
+        retreat_contrib = (
+            retreat_reward["retreat_recover"]
+            * GameConfig.REWARD_WEIGHT_DICT["retreat_recover"]
+        )
+        recover_contrib = (
+            recover_reward["retreat_recover"]
+            * GameConfig.REWARD_WEIGHT_DICT["retreat_recover"]
+        )
+        self.assertGreater(retreat_contrib, 0.0)
+        self.assertGreater(recover_contrib, 0.0)
+        self.assertLessEqual(
+            retreat_reward["retreat_recover"] + recover_reward["retreat_recover"],
+            GameConfig.RETREAT_RECOVER_MAX_PER_EPISODE,
+        )
+
+        good_trade = make_frame(
+            frame_no=3,
+            main=make_hero(MAIN_ID, 1, hp=850, max_hp=1000, total_hurt_to_hero=600, x=0),
+            enemy=make_hero(ENEMY_ID, 2, hp=700, max_hp=1000, total_hurt_to_hero=150, x=4500),
+        )
+        trade_reward = self.manager.result(good_trade)
+        trade_contrib = (
+            trade_reward["hp_point"] * GameConfig.REWARD_WEIGHT_DICT["hp_point"]
+        )
+
+        self.assertGreater(trade_contrib, retreat_contrib + recover_contrib)
+
+    def test_retreat_recovery_beats_forced_death(self):
+        danger = make_frame(
+            main=make_hero(MAIN_ID, 1, hp=300, max_hp=1000, dead_cnt=0, x=0),
+            enemy=make_hero(ENEMY_ID, 2, hp=1000, max_hp=1000, attack_range=5000, x=3000),
+        )
+        recovered = make_frame(
+            frame_no=1,
+            main=make_hero(MAIN_ID, 1, hp=700, max_hp=1000, dead_cnt=0, x=-23000),
+            enemy=make_hero(ENEMY_ID, 2, hp=1000, max_hp=1000, attack_range=5000, x=10000),
+        )
+        death = make_frame(
+            frame_no=1,
+            main=make_hero(MAIN_ID, 1, hp=0, max_hp=1000, dead_cnt=1, x=0),
+            enemy=make_hero(ENEMY_ID, 2, hp=1000, max_hp=1000, attack_range=5000, x=3000),
+        )
+
+        retreat_manager = GameRewardManager(MAIN_ID)
+        retreat_manager.result(danger)
+        recovered_reward = retreat_manager.result(recovered)
+
+        death_manager = GameRewardManager(MAIN_ID)
+        death_manager.result(danger)
+        death_reward = death_manager.result(death)
+
+        self.assertGreater(recovered_reward["reward_sum"], death_reward["reward_sum"])
 
     def test_low_hp_in_enemy_threat_area_is_penalized(self):
         initial = make_frame(
@@ -664,7 +767,10 @@ class RewardDesignTests(unittest.TestCase):
         reward = {"reward_sum": 1.25}
         win_bonus = self.manager.apply_terminal_outcome(
             reward,
-            make_frame(enemy_tower=make_tower(2, hp=0, x=15000)),
+            make_frame(
+                main=make_hero(MAIN_ID, 1, total_hurt_to_hero=600),
+                enemy_tower=make_tower(2, hp=0, x=15000),
+            ),
             win=None,
         )
 
@@ -678,6 +784,42 @@ class RewardDesignTests(unittest.TestCase):
             self.manager.apply_terminal_outcome(reward, make_frame(), win=1),
             0.0,
         )
+
+    def test_terminal_win_is_discounted_for_low_interaction_or_deaths(self):
+        low_interaction_reward = {"reward_sum": 0.0}
+        low_interaction_manager = GameRewardManager(MAIN_ID)
+        low_interaction_bonus = low_interaction_manager.apply_terminal_outcome(
+            low_interaction_reward,
+            make_frame(
+                main=make_hero(MAIN_ID, 1, total_hurt_to_hero=0, kill_cnt=0),
+                enemy_tower=make_tower(2, hp=0, x=15000),
+            ),
+            win=None,
+        )
+
+        deaths_reward = {"reward_sum": 0.0}
+        deaths_manager = GameRewardManager(MAIN_ID)
+        deaths_bonus = deaths_manager.apply_terminal_outcome(
+            deaths_reward,
+            make_frame(
+                main=make_hero(MAIN_ID, 1, dead_cnt=2, total_hurt_to_hero=600),
+                enemy_tower=make_tower(2, hp=0, x=15000),
+            ),
+            win=None,
+        )
+
+        self.assertAlmostEqual(
+            low_interaction_bonus,
+            GameConfig.TERMINAL_WIN_REWARD
+            * (1.0 - GameConfig.TERMINAL_LOW_INTERACTION_DISCOUNT),
+        )
+        self.assertAlmostEqual(
+            deaths_bonus,
+            GameConfig.TERMINAL_WIN_REWARD
+            * (1.0 - 2 * GameConfig.TERMINAL_DEATH_DISCOUNT),
+        )
+        self.assertLess(low_interaction_bonus, GameConfig.TERMINAL_WIN_REWARD)
+        self.assertLess(deaths_bonus, GameConfig.TERMINAL_WIN_REWARD)
 
         loss_reward = {"reward_sum": 0.0}
         loss_manager = GameRewardManager(MAIN_ID)

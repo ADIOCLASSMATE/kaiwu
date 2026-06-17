@@ -134,7 +134,8 @@ def build_monitor():
     # ---- reward 子项分解：看清回报由什么驱动 ----
     reward_items = [
         ("rwd_tower_hp_point", "塔血优势"),
-        ("rwd_lane_progress", "满血后场惩罚"),
+        ("rwd_lane_progress", "安全上线引导"),
+        ("rwd_retreat_recover", "危险回撤回血"),
         ("rwd_hp_point", "英雄伤害优势"),
         ("rwd_danger_penalty", "低血危险惩罚"),
         ("rwd_kill", "击杀"),

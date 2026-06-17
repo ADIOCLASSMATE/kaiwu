@@ -1,4 +1,4 @@
-import { api, withCtx, loadSession } from '../_session.js';
+import { api, contextFromArgs, apiPrefix, DOMAIN_ARGS, loadSession } from '../_session.js';
 
 export default {
   name: 'resource-balance',
@@ -7,12 +7,15 @@ export default {
   domain: 'tencentarena.com',
   args: [
     { name: 'module', type: 'string', default: 'train', help: '资源模块: train / dev / battle' },
+    ...DOMAIN_ARGS,
   ],
   columns: ['key', 'quota', 'used'],
   run: async (kwargs) => {
     const session = await loadSession();
-    const data = await api('/api/v5/Competition/GetResourceBalance',
-      withCtx(session, { resource_module: kwargs.module }), { session });
+    const ctx = contextFromArgs(session, kwargs);
+    const prefix = apiPrefix(ctx);
+    const data = await api(`${prefix}/GetResourceBalance`,
+      { ...ctx,  resource_module: kwargs.module }, { session });
     const stat = data.stat || {};
     const packResource = ((stat.pack || [])[0]?.resource_module?.[kwargs.module]?.resource) || [];
     const usedResource = ((stat.used || [])[0]?.resource_module?.[kwargs.module]?.resource) || [];

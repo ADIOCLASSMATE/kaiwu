@@ -11,7 +11,8 @@ Author: Tencent AI Arena Authors
 零和子项（主-敌之差的帧间增量）：
   tower_hp_point, hp_point(英雄对英雄伤害), kill, money, exp
 非零和子项（仅主视角）：
-  lane_progress（满血后场位置惩罚：泉水强，己方神符后快速衰减，神符到中线极弱）、
+  lane_progress（安全时从泉水/后场到己方神符的前进势能差分）、
+  retreat_recover（危险局面下合理回撤/回血的小奖励）、
   danger_penalty（低血仍处在敌方威胁区）、
   death（自身死亡增量）、
   minion_hp_point（可见敌方英雄攻击己方小兵造成的掉血惩罚）、
@@ -104,6 +105,9 @@ class GameRewardManager:
         self._tower_attack_event = 0.0
         self._terminal_applied = False
         self._lane_cake_anchor_by_camp = {}
+        self._lane_progress_sum = 0.0
+        self._retreat_recover_sum = 0.0
+        self._retreat_need_memory = 0
 
     def result(self, frame_data):
         self.frame_data_process(frame_data)
@@ -376,12 +380,25 @@ class GameRewardManager:
             elif reward_name == "lane_progress":
                 main_hero, main_tower = self._get_camp_units(frame_data, camp)
                 enemy_camp = 2 if camp == 1 else 1
-                _, enemy_tower = self._get_camp_units(frame_data, enemy_camp)
-                rs.cur_frame_value = self.calculate_lane_guidance_penalty(
+                enemy_hero, enemy_tower = self._get_camp_units(frame_data, enemy_camp)
+                rs.cur_frame_value = self.calculate_lane_guidance_potential(
                     frame_data,
                     camp,
                     main_hero,
                     main_tower,
+                    enemy_hero,
+                    enemy_tower,
+                )
+            elif reward_name == "retreat_recover":
+                main_hero, main_tower = self._get_camp_units(frame_data, camp)
+                enemy_camp = 2 if camp == 1 else 1
+                enemy_hero, enemy_tower = self._get_camp_units(frame_data, enemy_camp)
+                rs.cur_frame_value = self.calculate_retreat_recover_state(
+                    frame_data,
+                    camp,
+                    main_hero,
+                    main_tower,
+                    enemy_hero,
                     enemy_tower,
                 )
             elif reward_name == "hp_point":
@@ -409,54 +426,186 @@ class GameRewardManager:
                 rs.cur_frame_value = self._minion_hp_snapshot(frame_data, camp)
             # 事件奖励与 idle_penalty 在 get_reward 中直接计算。
 
-    def calculate_lane_guidance_penalty(
+    def calculate_lane_guidance_potential(
         self,
         frame_data,
         camp,
         main_hero,
         main_tower,
+        enemy_hero,
         enemy_tower,
     ):
-        """Return full-HP backfield penalty strength in [0, 1]."""
+        """Return (potential, active) for safe fountain-to-own-cake progress."""
         if main_hero is None or main_tower is None or enemy_tower is None:
-            return 0.0
+            return (0.0, False)
         if self._is_sentinel(main_hero.get("location", {})):
-            return 0.0
-        if self._raw_hp_ratio(main_hero) < GameConfig.LANE_GUIDANCE_HP_THRESHOLD:
-            return 0.0
+            return (0.0, False)
 
         hero_pos = (main_hero["location"]["x"], main_hero["location"]["z"])
         own_pos = (main_tower["location"]["x"], main_tower["location"]["z"])
         enemy_pos = (enemy_tower["location"]["x"], enemy_tower["location"]["z"])
         hero_t = self._lane_projection_t(hero_pos, own_pos, enemy_pos)
         if hero_t is None:
-            return 0.0
-        if hero_t >= 0.5:
-            return 0.0
+            return (0.0, False)
 
         cake_t = self._own_cake_projection_t(frame_data, camp, own_pos, enemy_pos)
         if cake_t is None:
             cake_t = GameConfig.LANE_GUIDANCE_FALLBACK_CAKE_T
         cake_t = min(cake_t, 0.49)
+        fountain_t = min(GameConfig.LANE_GUIDANCE_FOUNTAIN_T, cake_t - 1e-3)
+        denom = cake_t - fountain_t
+        if denom <= 0:
+            return (0.0, False)
 
-        epsilon = GameConfig.LANE_GUIDANCE_EPSILON
-        if hero_t <= cake_t:
-            fountain_t = min(GameConfig.LANE_GUIDANCE_FOUNTAIN_T, cake_t - 1e-3)
-            if hero_t <= fountain_t:
-                return 1.0
-            progress = (hero_t - fountain_t) / (cake_t - fountain_t)
-            progress = max(0.0, min(1.0, progress))
-            return epsilon + (1.0 - epsilon) * math.pow(
-                1.0 - progress,
-                GameConfig.LANE_GUIDANCE_BACK_EXPONENT,
+        potential = (hero_t - fountain_t) / denom
+        potential = max(0.0, min(1.0, potential))
+        active = (
+            fountain_t <= hero_t <= cake_t
+            and self._is_lane_guidance_safe(
+                frame_data,
+                main_hero,
+                enemy_hero,
+                enemy_tower,
+                camp,
             )
+        )
+        return (potential, active)
 
-        center_span = 0.5 - cake_t
-        if center_span <= 0:
+    def _is_lane_guidance_safe(
+        self,
+        frame_data,
+        main_hero,
+        enemy_hero,
+        enemy_tower,
+        main_camp,
+    ):
+        if self._raw_hp_ratio(main_hero) < GameConfig.LANE_GUIDANCE_HP_THRESHOLD:
+            return False
+        if self.calculate_danger_penalty(
+            frame_data,
+            main_hero,
+            enemy_hero,
+            enemy_tower,
+            main_camp,
+        ) > 0:
+            return False
+        if (
+            enemy_hero is not None
+            and enemy_hero.get("hp", 0) > 0
+            and visible_to_camp(enemy_hero, main_camp)
+        ):
+            loc = enemy_hero.get("location", {})
+            if not self._is_sentinel(loc):
+                main_pos = (
+                    main_hero["location"]["x"],
+                    main_hero["location"]["z"],
+                )
+                enemy_pos = (loc["x"], loc["z"])
+                enemy_range = float(enemy_hero.get("attack_range", 0) or 0)
+                threat_range = max(enemy_range * GameConfig.DANGER_RANGE_MULT, 3500.0)
+                enemy_hp = self._raw_hp_ratio(enemy_hero)
+                main_hp = self._raw_hp_ratio(main_hero)
+                if (
+                    math.dist(main_pos, enemy_pos) <= threat_range
+                    and enemy_hp >= main_hp - 0.1
+                ):
+                    return False
+        return True
+
+    def calculate_retreat_recover_state(
+        self,
+        frame_data,
+        camp,
+        main_hero,
+        main_tower,
+        enemy_hero,
+        enemy_tower,
+    ):
+        if main_hero is None or main_tower is None or enemy_tower is None:
+            return {
+                "hp_ratio": 0.0,
+                "lane_t": None,
+                "retreat_need": 0.0,
+                "in_retreat_zone": False,
+            }
+        lane_t = self._hero_lane_t(main_hero, main_tower, enemy_tower)
+        retreat_need = self.calculate_retreat_need(
+            frame_data,
+            camp,
+            main_hero,
+            enemy_hero,
+            enemy_tower,
+        )
+        return {
+            "hp_ratio": self._raw_hp_ratio(main_hero),
+            "lane_t": lane_t,
+            "retreat_need": retreat_need,
+            "in_retreat_zone": self._in_retreat_zone(frame_data, main_hero, camp),
+        }
+
+    def calculate_retreat_need(
+        self,
+        frame_data,
+        main_camp,
+        main_hero,
+        enemy_hero,
+        enemy_tower,
+    ):
+        if main_hero is None or self._is_sentinel(main_hero.get("location", {})):
             return 0.0
-        progress_to_center = (hero_t - cake_t) / center_span
-        progress_to_center = max(0.0, min(1.0, progress_to_center))
-        return epsilon * (1.0 - progress_to_center)
+        main_hp = self._raw_hp_ratio(main_hero)
+        low_hp = max(
+            0.0,
+            (GameConfig.RETREAT_LOW_HP_THRESHOLD - main_hp)
+            / GameConfig.RETREAT_LOW_HP_THRESHOLD,
+        )
+        threat = self.calculate_danger_penalty(
+            frame_data,
+            main_hero,
+            enemy_hero,
+            enemy_tower,
+            main_camp,
+        )
+        enemy_pressure = 0.0
+        if (
+            enemy_hero is not None
+            and enemy_hero.get("hp", 0) > 0
+            and visible_to_camp(enemy_hero, main_camp)
+        ):
+            loc = enemy_hero.get("location", {})
+            if not self._is_sentinel(loc):
+                main_pos = (
+                    main_hero["location"]["x"],
+                    main_hero["location"]["z"],
+                )
+                enemy_pos = (loc["x"], loc["z"])
+                enemy_range = float(enemy_hero.get("attack_range", 0) or 0)
+                pressure_range = max(enemy_range * 1.3, 6000.0)
+                distance = math.dist(main_pos, enemy_pos)
+                enemy_hp = self._raw_hp_ratio(enemy_hero)
+                hp_advantage = enemy_hp - main_hp
+                if distance <= pressure_range and hp_advantage >= GameConfig.RETREAT_ENEMY_HP_ADVANTAGE:
+                    enemy_pressure = min(
+                        1.0,
+                        (hp_advantage / max(GameConfig.RETREAT_ENEMY_HP_ADVANTAGE, 1e-6))
+                        * (1.0 - 0.5 * distance / pressure_range),
+                    )
+        return max(low_hp if threat > 0 else 0.0, enemy_pressure)
+
+    def _hero_lane_t(self, hero, own_tower, enemy_tower):
+        if (
+            hero is None
+            or own_tower is None
+            or enemy_tower is None
+            or self._is_sentinel(hero.get("location", {}))
+            or self._is_sentinel(own_tower.get("location", {}))
+            or self._is_sentinel(enemy_tower.get("location", {}))
+        ):
+            return None
+        hero_pos = (hero["location"]["x"], hero["location"]["z"])
+        own_pos = (own_tower["location"]["x"], own_tower["location"]["z"])
+        enemy_pos = (enemy_tower["location"]["x"], enemy_tower["location"]["z"])
+        return self._lane_projection_t(hero_pos, own_pos, enemy_pos)
 
     def _own_cake_projection_t(self, frame_data, camp, own_pos, enemy_pos):
         best = None
@@ -802,7 +951,20 @@ class GameRewardManager:
                 elif rs.value < 0 and main_attacking_enemy:
                     rs.value *= GameConfig.TOWER_DIVE_DISCOUNT
             elif reward_name == "lane_progress":
-                rs.value = main.cur_frame_value
+                cur_potential, cur_active = main.cur_frame_value
+                last_potential, _ = main.last_frame_value
+                raw_delta = cur_potential - last_potential if cur_active else 0.0
+                rs.value = self._consume_bounded_episode_budget(
+                    raw_delta,
+                    "_lane_progress_sum",
+                    GameConfig.LANE_PROGRESS_MIN_PER_EPISODE,
+                    GameConfig.LANE_PROGRESS_MAX_PER_EPISODE,
+                )
+            elif reward_name == "retreat_recover":
+                rs.value = self._retreat_recover_delta(
+                    main.last_frame_value,
+                    main.cur_frame_value,
+                )
             elif reward_name == "danger_penalty":
                 rs.value = main.cur_frame_value
             elif reward_name == "death":
@@ -843,6 +1005,55 @@ class GameRewardManager:
         if reward_dict.get("idle_penalty", 0.0) > 0:
             self._idle_triggered_cnt += 1
 
+    def _consume_bounded_episode_budget(self, raw_value, attr, min_total, max_total):
+        current = getattr(self, attr)
+        target = max(min_total, min(max_total, current + raw_value))
+        value = target - current
+        setattr(self, attr, target)
+        return value
+
+    def _retreat_recover_delta(self, previous, current):
+        if not isinstance(previous, dict) or not isinstance(current, dict):
+            return 0.0
+
+        had_recent_need = self._retreat_need_memory > 0
+        retreat_need = float(current.get("retreat_need", 0.0) or 0.0)
+        if retreat_need > 0:
+            self._retreat_need_memory = GameConfig.RETREAT_NEED_MEMORY_FRAMES
+            had_recent_need = True
+
+        value = 0.0
+        last_t = previous.get("lane_t")
+        cur_t = current.get("lane_t")
+        if retreat_need > 0 and last_t is not None and cur_t is not None:
+            retreat_delta = max(0.0, last_t - cur_t)
+            if retreat_delta > 0:
+                value += min(
+                    GameConfig.RETREAT_MOVE_MAX_STEP,
+                    (retreat_delta / GameConfig.RETREAT_MOVE_T_SCALE)
+                    * GameConfig.RETREAT_MOVE_MAX_STEP
+                    * retreat_need,
+                )
+
+        hp_delta = float(current.get("hp_ratio", 0.0) or 0.0) - float(
+            previous.get("hp_ratio", 0.0) or 0.0
+        )
+        if had_recent_need and current.get("in_retreat_zone") and hp_delta > 0:
+            value += min(
+                GameConfig.RETREAT_HEAL_MAX_STEP,
+                hp_delta * GameConfig.RETREAT_HEAL_SCALE,
+            )
+
+        if retreat_need <= 0 and self._retreat_need_memory > 0:
+            self._retreat_need_memory -= 1
+
+        return self._consume_bounded_episode_budget(
+            value,
+            "_retreat_recover_sum",
+            0.0,
+            GameConfig.RETREAT_RECOVER_MAX_PER_EPISODE,
+        )
+
     def apply_terminal_outcome(self, reward_dict, frame_data, win=None):
         """Add a one-shot terminal reward and return its weighted contribution."""
         if self._terminal_applied:
@@ -850,10 +1061,27 @@ class GameRewardManager:
         self._terminal_applied = True
 
         outcome = self._terminal_outcome(frame_data, win)
-        bonus = outcome * GameConfig.TERMINAL_WIN_REWARD
+        quality = self._terminal_quality(frame_data) if outcome > 0 else 1.0
+        bonus = outcome * GameConfig.TERMINAL_WIN_REWARD * quality
         reward_dict["terminal"] = outcome
         reward_dict["reward_sum"] = reward_dict.get("reward_sum", 0.0) + bonus
         return bonus
+
+    def _terminal_quality(self, frame_data):
+        main_hero = self._main_hero(frame_data)
+        if main_hero is None:
+            return GameConfig.TERMINAL_WIN_MIN_QUALITY
+        quality = 1.0
+        dead_cnt = int(main_hero.get("dead_cnt", 0) or 0)
+        quality -= dead_cnt * GameConfig.TERMINAL_DEATH_DISCOUNT
+        low_interaction = (
+            float(main_hero.get("total_hurt_to_hero", 0) or 0)
+            < GameConfig.TERMINAL_INTERACTION_DAMAGE
+            and int(main_hero.get("kill_cnt", 0) or 0) <= 0
+        )
+        if low_interaction:
+            quality -= GameConfig.TERMINAL_LOW_INTERACTION_DISCOUNT
+        return max(GameConfig.TERMINAL_WIN_MIN_QUALITY, min(1.0, quality))
 
     def _terminal_outcome(self, frame_data, win):
         if win == 1:

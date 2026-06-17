@@ -65,21 +65,26 @@ class GameConfig:
     #   2. 推塔奖励只作为终局目标的中低频信号，越塔/无兵线硬点塔折价；
     #   3. 死亡规避不能只等 dead_cnt 发生后才反馈，低血处在威胁区时给轻量逐帧惩罚。
     REWARD_WEIGHT_DICT = {
-        "tower_hp_point": 1.5,      # 双方外塔血量优势变化，越塔/无兵线推塔时折价
-        "lane_progress": -0.1,      # 满血后场位置惩罚：泉水强，神符到中线极弱
-        "hp_point": 2.0,            # 英雄对英雄伤害优势变化，只奖励自己打出的压制
-        "danger_penalty": -0.5,     # 低血仍在敌英雄/敌塔威胁区的逐帧惩罚
-        "kill": 2.5,                # 击杀数优势变化；不再与 death 重复计数
-        "death": -2.0,              # 自身死亡增量，直接压制送死捷径
+        "tower_hp_point": 1.2,      # 双方外塔血量优势变化，越塔/无兵线推塔时折价
+        "lane_progress": 2.0,       # 安全时泉水到己方神符的前进势能差分，小上限探索引导
+        "retreat_recover": 1.0,     # 危险局面下合理回撤/回血的小奖励，有整局上限
+        "hp_point": 4.0,            # 英雄对英雄伤害优势变化，只奖励自己打出的压制
+        "danger_penalty": -1.0,     # 低血仍在敌英雄/敌塔威胁区的逐帧惩罚
+        "kill": 4.0,                # 击杀数优势变化；不再与 death 重复计数
+        "death": -6.0,              # 自身死亡增量，直接压制送死捷径
         "money": 0.8,               # 累计经济 money_cnt 优势变化
         "exp": 0.8,                 # 跨等级累计经验优势变化
         "last_hit": 1.0,            # dead_action 中英雄真实补刀/阻止敌方补刀事件
-        "minion_hp_point": 0.1,     # 敌方英雄攻击己方兵的小惩罚；不奖励无脑清线
+        "minion_hp_point": 0.4,     # 敌方英雄攻击己方兵的小惩罚；不奖励无脑清线
         "kill_monster": 0.3,        # dead_action 中中立野怪归属
         "idle_penalty": -0.1,       # 长时间停滞后的渐进式每帧惩罚
         "tower_attack": 0.02,       # 安全压塔时选择点塔动作的小奖励
     }
     TERMINAL_WIN_REWARD = 8.0
+    TERMINAL_WIN_MIN_QUALITY = 0.40
+    TERMINAL_DEATH_DISCOUNT = 0.20
+    TERMINAL_LOW_INTERACTION_DISCOUNT = 0.25
+    TERMINAL_INTERACTION_DAMAGE = 300.0
     TOWER_DIVE_DISCOUNT = 0.25
     TOWER_NO_MINION_DISCOUNT = 0.15
     TOWER_PUSH_MINION_RADIUS = 6500
@@ -99,17 +104,25 @@ class GameConfig:
     # 敌方明显更残时允许低血反打/追击：只豁免敌英雄威胁，不豁免敌塔威胁。
     DANGER_COUNTERPLAY_HP_RATIO = 0.8
 
-    # ---- 满血后场位置引导 ----
-    # lane_progress 现在表示“惩罚强度”而不是正向势函数：
-    #   泉水/深后场约 1.0；
-    #   到己方神符高次衰减到一个很小的 epsilon；
-    #   己方神符到中线只保留极弱线性引导；
-    #   中线及以后为 0。仅满血启用，避免惩罚合理回撤。
-    LANE_GUIDANCE_HP_THRESHOLD = 0.99
-    LANE_GUIDANCE_EPSILON = 0.01
-    LANE_GUIDANCE_BACK_EXPONENT = 4.0
+    # ---- 安全上线引导 ----
+    # lane_progress 是泉水/后场到己方神符的势能差分，只在健康且安全时启用；
+    # 不再对“满血在后场”逐帧扣分，避免破坏正常回城回血。
+    LANE_GUIDANCE_HP_THRESHOLD = 0.70
     LANE_GUIDANCE_FOUNTAIN_T = -0.25
     LANE_GUIDANCE_FALLBACK_CAKE_T = -0.08
+    LANE_PROGRESS_MAX_PER_EPISODE = 1.0
+    LANE_PROGRESS_MIN_PER_EPISODE = -0.5
+
+    # ---- 危险回撤/回血小奖励 ----
+    # 总量必须显著小于前场打出换血/补刀收益，但要优于继续硬操作送死。
+    RETREAT_RECOVER_MAX_PER_EPISODE = 1.5
+    RETREAT_MOVE_MAX_STEP = 0.08
+    RETREAT_MOVE_T_SCALE = 0.15
+    RETREAT_HEAL_MAX_STEP = 0.20
+    RETREAT_HEAL_SCALE = 0.8
+    RETREAT_NEED_MEMORY_FRAMES = 300
+    RETREAT_LOW_HP_THRESHOLD = 0.50
+    RETREAT_ENEMY_HP_ADVANTAGE = 0.25
 
     # ---- 挂机检测参数（纯产出停滞判据）----
     # 判据：经济(money_cnt)与对英雄伤害(total_hurt_to_hero)帧间增量同时停滞 → 累计 inactive。

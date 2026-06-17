@@ -1,4 +1,4 @@
-import { api, withCtx, loadSession } from '../_session.js';
+import { api, contextFromArgs, apiPrefix, DOMAIN_ARGS, loadSession } from '../_session.js';
 
 export default {
   name: 'create-train-task',
@@ -7,6 +7,7 @@ export default {
   domain: 'tencentarena.com',
   args: [
     { name: 'name', type: 'string', required: true, help: '任务名（最长 20 字符）' },
+    ...DOMAIN_ARGS,
     { name: 'reuse-code-from', type: 'int', required: false, help: '复用某 task 的代码包 file。缺省取最近 1 条 task' },
     { name: 'file-key', type: 'string', default: '', help: '直接指定 file.key（覆盖 --reuse-code-from）' },
     { name: 'file-name', type: 'string', default: '', help: '配合 --file-key 用的 filename' },
@@ -24,6 +25,8 @@ export default {
   columns: ['key', 'value'],
   run: async (kwargs) => {
     const session = await loadSession();
+    const ctx = contextFromArgs(session, kwargs);
+    const prefix = apiPrefix(ctx);
     if (kwargs.name.length > 20) throw new Error(`--name 超过 20 字符上限`);
     if (kwargs.desc && kwargs.desc.length > 100) throw new Error(`--desc 超过 100 字符上限`);
 
@@ -41,8 +44,8 @@ export default {
         type: 'code', id: 0,
       };
     } else {
-      const list = await api('/api/v5/Competition/ListTrainTask',
-        withCtx(session, { page: { current: 1, size: 50 } }), { session });
+      const list = await api(`${prefix}/ListTrainTask`,
+        { ...ctx,  page: { current: 1, size: 50 } }, { session });
       const tasks = list.train_task || [];
       let src;
       if (kwargs['reuse-code-from']) {
@@ -68,8 +71,8 @@ export default {
     let preTrainModel = null;
     if (kwargs['pre-train-model-id']) {
       // 从 list-ai-models 反查完整字段（id / algorithm / training_mode / file 等）
-      const ml = await api('/api/v5/Competition/ListAiModel',
-        withCtx(session, { page: { current: 1, size: 50 } }), { session });
+      const ml = await api(`${prefix}/ListAiModel`,
+        { ...ctx,  page: { current: 1, size: 50 } }, { session });
       const m = (ml.ai_model || []).find(x => x.id === kwargs['pre-train-model-id']);
       if (!m) throw new Error(`pre-train-model-id=${kwargs['pre-train-model-id']} 不在最近 50 个 ai_model 里`);
       preTrainModel = {
@@ -84,7 +87,7 @@ export default {
       };
     }
 
-    const body = withCtx(session, {
+    const body = { ...ctx, 
       name: kwargs.name,
       algorithm: kwargs.algorithm,
       training_mode: kwargs['training-mode'],
@@ -94,7 +97,7 @@ export default {
       file,
       pre_train_model: preTrainModel,
       cluster_config_id: kwargs['cluster-config-id'],
-    });
+    };
 
     // 默认 dry-run，除非 --yes 或 --no-dry-run
     const reallyDo = kwargs.yes || kwargs['dry-run'] === false;
@@ -102,7 +105,7 @@ export default {
       return [
         { key: 'mode', value: 'DRY-RUN（默认）。加 --yes 才真起任务' },
         { key: 'method', value: 'POST' },
-        { key: 'url', value: '/api/v5/Competition/CreateTrainTask' },
+        { key: 'url', value: `${prefix}/CreateTrainTask` },
         { key: 'body', value: JSON.stringify(body, null, 2) },
         { key: 'reuse_file_from', value: kwargs['reuse-code-from'] || '(最近 task 自动选)' },
         { key: 'file_key', value: file.key },
@@ -112,7 +115,7 @@ export default {
     }
 
     // 真发
-    const data = await api('/api/v5/Competition/CreateTrainTask', body, { session });
+    const data = await api(`${prefix}/CreateTrainTask`, body, { session });
     return [
       { key: 'mode', value: 'REAL' },
       { key: 'created_task_id', value: data.id ?? '(查 ListTrainTask)' },

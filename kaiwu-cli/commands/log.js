@@ -1,23 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { api, loadSession } from '../_session.js';
-
-function contextFromArgs(session, kwargs) {
-  const domainType = kwargs['domain-type'] || session.domain_type || 'competition_stage';
-  const domainId = kwargs['domain-id'] || session.stage_id;
-  const experimentId = kwargs['experiment-id'] || session.experiment_id;
-  const teamId = kwargs['team-id'] || session.team_id;
-  const body = {
-    domain: { type: domainType, id: domainId },
-    experiment_id: experimentId,
-  };
-  if (domainType !== 'course' && teamId) body.competition_team_id = teamId;
-  return body;
-}
-
-function apiPrefix(ctx) {
-  return ctx.domain?.type === 'course' ? '/api/v5/Course' : '/api/v5/Competition';
-}
+import { api, contextFromArgs, apiPrefix, loadSession } from '../_session.js';
 
 function parseLog(raw) {
   if (typeof raw !== 'string') return { raw };

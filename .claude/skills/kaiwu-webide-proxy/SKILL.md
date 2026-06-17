@@ -1,6 +1,6 @@
 ---
 name: kaiwu-webide-proxy
-description: Use for this Tencent Kaiwu/Tencent Arena HoK 1v1 course project when operating the remote WebIDE, syncing local code, running remote commands, checking IDE status, running train_test.py, or fetching training task logs from Kaiwu training management. This project must use the WebIDE port-proxy workflow for remote shell work and Course/GetTrainLog for course training logs.
+description: Use for this Tencent Kaiwu/Tencent Arena HoK 1v1 course project when operating the remote WebIDE, syncing local code, running remote commands, checking IDE status, running train_test.py, or fetching training task logs/metrics from Kaiwu training management. This project must use the WebIDE port-proxy workflow for remote shell work and Course/GetTrainLog + Course/GetTrainMetricRange for course training data.
 ---
 
 # Kaiwu WebIDE Proxy Workflow
@@ -78,9 +78,9 @@ python3 script/kaiwu_remote.py proxy-command --cmd 'ps -ef | grep train_test.py 
 python3 script/kaiwu_remote.py proxy-command --cmd 'cd /data/projects/hok1v1 && grep -R "ERROR\\|Traceback\\|Exception\\|Execution error" -n log/learner log/aisrv 2>/dev/null | tail -80 || true'
 ```
 
-## Training Management Logs
+## Training Management (Logs & Metrics)
 
-For platform training-management logs in this course project, use `Course/GetTrainLog`, not `Competition/GetTrainLog`.
+For platform training-management data in this course project, use `Course/GetTrainLog` and `Course/GetTrainMetricRange`, **not** `Competition/GetTrainLog` / `Competition/GetTrainMetricRange`.
 
 The verified course context is:
 
@@ -90,9 +90,9 @@ domain.id=2383
 experiment_id=15823
 ```
 
-Use the local Kaiwu session token from `~/.kaiwu/session.json`; do not use the WebIDE proxy for platform log APIs.
+Use the local Kaiwu session token from `~/.kaiwu/session.json`; do not use the WebIDE proxy for platform APIs.
 
-### CLI
+### Logs CLI
 
 Fetch all raw logs for a task by name and save JSONL:
 
@@ -139,7 +139,56 @@ node kaiwu-cli/bin/kaiwu.js log \
   --all
 ```
 
-### Raw API Contract
+### Metrics CLI
+
+Fetch all known metrics for a task by ID (default: summary with min/max/last):
+
+```bash
+node kaiwu-cli/bin/kaiwu.js metric \
+  --domain-type course \
+  --domain-id 2383 \
+  --experiment-id 15823 \
+  --task-id 218419
+```
+
+Fetch specific metrics by name:
+
+```bash
+node kaiwu-cli/bin/kaiwu.js metric \
+  --domain-type course \
+  --domain-id 2383 \
+  --experiment-id 15823 \
+  --task-id 218419 \
+  --names win_rate,reward,total_loss
+```
+
+Dump raw values for a metric:
+
+```bash
+node kaiwu-cli/bin/kaiwu.js metric \
+  --domain-type course \
+  --domain-id 2383 \
+  --experiment-id 15823 \
+  --task-id 218419 \
+  --names win_rate \
+  --raw
+```
+
+Custom PromQL expression:
+
+```bash
+node kaiwu-cli/bin/kaiwu.js metric \
+  --domain-type course \
+  --domain-id 2383 \
+  --experiment-id 15823 \
+  --task-id 218419 \
+  --expr 'avg(kaiwu_win_rate{model_id="selfplay"})' \
+  --step 60
+```
+
+Available metric names: `win_rate`, `reward`, `total_loss`, `value_loss`, `policy_loss`, `entropy_loss`, `self_tower_hp`, `enemy_tower_hp`, `frame`, `money_per_frame`, `kill`, `death`, `hurt_by_hero`, `hurt_to_hero`, `predict_succ_cnt`, `train_global_step`, `episode_cnt`, `batch_train_cost_time_ms`, `sample_production_and_consumption_ratio`, and more (37 total).
+
+### Raw Log API Contract
 
 Valid `Course/GetTrainLog` queries:
 

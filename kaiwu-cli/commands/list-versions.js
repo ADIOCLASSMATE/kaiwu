@@ -1,4 +1,4 @@
-import { api, withCtx, loadSession } from '../_session.js';
+import { api, contextFromArgs, apiPrefix, loadSession } from '../_session.js';
 
 export default {
   name: 'list-versions',
@@ -7,9 +7,11 @@ export default {
   domain: 'tencentarena.com',
   args: [],
   columns: ['project_id', 'project_version', 'experiment_id'],
-  run: async () => {
+  run: async (kwargs) => {
     const session = await loadSession();
-    const data = await api('/api/v5/Competition/ListProjectVersion', withCtx(session), { session });
+    const ctx = contextFromArgs(session, kwargs);
+    const prefix = apiPrefix(ctx);
+    const data = await api(`${prefix}/ListProjectVersion`, ctx, { session });
     return (data.project_versions || []);
   },
 };

@@ -1,4 +1,4 @@
-import { loadSession } from '../_session.js';
+import { contextFromArgs, apiPrefix, loadSession } from '../_session.js';
 import { authDownloadAndSave } from '../_download_util.js';
 
 const DEFAULT_KEY = 'public/abs_tools/ABSParsingTool_hok_g_shelled_v1.0.2.zip';
@@ -15,9 +15,11 @@ export default {
   columns: ['file_key', 'size_mb', 'output'],
   run: async (kwargs) => {
     const session = await loadSession();
+    const ctx = contextFromArgs(session, kwargs);
+    const prefix = apiPrefix(ctx);
     const fileKey = kwargs['file-key'];
     const out = kwargs.output || fileKey.split('/').pop() || 'abs_tool.zip';
-    const r = await authDownloadAndSave(session, fileKey,
+    const r = await authDownloadAndSave(session, ctx, fileKey,
       { type: 'common', id: 0 }, out);
     return [{ file_key: fileKey, size_mb: r.size_mb, output: r.output }];
   },

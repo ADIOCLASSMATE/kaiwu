@@ -1,4 +1,4 @@
-import { api, withCtx, loadSession } from '../_session.js';
+import { api, contextFromArgs, apiPrefix, DOMAIN_ARGS, loadSession } from '../_session.js';
 import { execSync } from 'node:child_process';
 
 export default {
@@ -8,13 +8,16 @@ export default {
   domain: 'tencentarena.com',
   args: [
     { name: 'task-id', type: 'int', required: false, help: '训练任务 id（默认取最新 running 的）' },
+    ...DOMAIN_ARGS,
     { name: 'in-automation', type: 'boolean', default: false, help: '在 opencli automation window 打开（默认走系统浏览器）' },
   ],
   columns: ['key', 'value'],
   run: async (kwargs) => {
     const session = await loadSession();
-    const list = await api('/api/v5/Competition/ListTrainTask',
-      withCtx(session, { page: { current: 1, size: 50 } }), { session });
+    const ctx = contextFromArgs(session, kwargs);
+    const prefix = apiPrefix(ctx);
+    const list = await api(`${prefix}/ListTrainTask`,
+      { ...ctx, page: { current: 1, size: 50 } }, { session });
     const tasks = list.train_task || [];
     let t;
     if (kwargs['task-id']) {
