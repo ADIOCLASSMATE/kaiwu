@@ -141,15 +141,15 @@ class AgentDiyWorkflowTests(unittest.TestCase):
         runner.train_opponent_mix = {
             "enable": True,
             "dynamic": False,
-            "selfplay": 0.0,
-            "common_ai": 1.0,
+            "selfplay": 0.5,
+            "common_ai": 0.5,
             "model_pool": 0.0,
-            "low_win_selfplay": 0.7,
-            "low_win_common_ai": 0.3,
-            "mid_win_selfplay": 0.6,
-            "mid_win_common_ai": 0.4,
-            "high_win_selfplay": 0.4,
-            "high_win_common_ai": 0.6,
+            "low_win_selfplay": 0.4,
+            "low_win_common_ai": 0.6,
+            "mid_win_selfplay": 0.35,
+            "mid_win_common_ai": 0.65,
+            "high_win_selfplay": 0.5,
+            "high_win_common_ai": 0.5,
             "common_ai_low_win_rate": 0.05,
             "common_ai_high_win_rate": 0.25,
         }
@@ -211,7 +211,7 @@ class AgentDiyWorkflowTests(unittest.TestCase):
         self.assertEqual(runner.do_predicts, [True, False])
         self.assertEqual(runner.do_samples, [True, False])
 
-    def test_training_opponent_curriculum_starts_mostly_selfplay(self):
+    def test_training_opponent_curriculum_anchors_on_common_ai_when_weak(self):
         config_path = (
             Path(__file__).resolve().parents[1]
             / "agent_diy/conf/train_env_conf.toml"
@@ -222,14 +222,14 @@ class AgentDiyWorkflowTests(unittest.TestCase):
         mix = config["episode"]["train_opponent_mix"]
         self.assertTrue(mix["enable"])
         self.assertTrue(mix["dynamic"])
-        self.assertEqual(mix["selfplay"], 0.7)
-        self.assertEqual(mix["common_ai"], 0.3)
-        self.assertEqual(mix["low_win_selfplay"], 0.7)
-        self.assertEqual(mix["low_win_common_ai"], 0.3)
-        self.assertEqual(mix["mid_win_selfplay"], 0.6)
-        self.assertEqual(mix["mid_win_common_ai"], 0.4)
-        self.assertEqual(mix["high_win_selfplay"], 0.4)
-        self.assertEqual(mix["high_win_common_ai"], 0.6)
+        self.assertEqual(mix["selfplay"], 0.5)
+        self.assertEqual(mix["common_ai"], 0.5)
+        self.assertEqual(mix["low_win_selfplay"], 0.4)
+        self.assertEqual(mix["low_win_common_ai"], 0.6)
+        self.assertEqual(mix["mid_win_selfplay"], 0.35)
+        self.assertEqual(mix["mid_win_common_ai"], 0.65)
+        self.assertEqual(mix["high_win_selfplay"], 0.5)
+        self.assertEqual(mix["high_win_common_ai"], 0.5)
         self.assertEqual(config["episode"]["eval_opponent_type"], "common_ai")
 
     def test_dynamic_opponent_mix_uses_common_ai_win_rate_bands(self):
@@ -246,17 +246,17 @@ class AgentDiyWorkflowTests(unittest.TestCase):
             {"env": {"common_ai": {"win_rate": 0.31}}}
         )
 
-        self.assertEqual((low["selfplay"], low["common_ai"]), (0.7, 0.3))
-        self.assertEqual((mid["selfplay"], mid["common_ai"]), (0.6, 0.4))
-        self.assertEqual((high["selfplay"], high["common_ai"]), (0.4, 0.6))
+        self.assertEqual((low["selfplay"], low["common_ai"]), (0.4, 0.6))
+        self.assertEqual((mid["selfplay"], mid["common_ai"]), (0.35, 0.65))
+        self.assertEqual((high["selfplay"], high["common_ai"]), (0.5, 0.5))
 
-    def test_dynamic_opponent_mix_uses_low_win_band_when_metrics_are_missing(self):
+    def test_dynamic_opponent_mix_uses_baseline_when_metrics_are_missing(self):
         runner = self._runner()
         runner.train_opponent_mix["dynamic"] = True
 
         mix = runner._effective_train_opponent_mix({})
 
-        self.assertEqual((mix["selfplay"], mix["common_ai"]), (0.7, 0.3))
+        self.assertEqual((mix["selfplay"], mix["common_ai"]), (0.5, 0.5))
 
 
 if __name__ == "__main__":
