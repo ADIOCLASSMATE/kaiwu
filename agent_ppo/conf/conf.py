@@ -8,6 +8,9 @@ Author: Tencent AI Arena Authors
 """
 
 
+from agent_diy.conf.conf import FeatureConfig
+
+
 class GameConfig:
     # Set the weight of each reward item and use it in reward_manager
     # 设置各个回报项的权重，在reward_manager中使用
@@ -26,7 +29,7 @@ class GameConfig:
 # Dimension configuration, used when building the model
 # 维度配置，构建模型时使用
 class DimConfig:
-    DIM_OF_FEATURE = [10]
+    DIM_OF_FEATURE = [FeatureConfig.FEATURE_DIM]
 
 
 # Configuration related to model and algorithms used
@@ -35,17 +38,12 @@ class Config:
     NETWORK_NAME = "network"
     LSTM_TIME_STEPS = 16
     LSTM_UNIT_SIZE = 512
-    EMBED_DIM = 128
-    N_HEADS = 4
-    N_LAYERS = 2
-    FFN_MULT = 4
-    N_REGISTER = 2
-    GLOBAL_PROJ_DIM = 128
-    ADALN_GATE_INIT = 0.1
-    LABEL_HEAD_HIDDEN_DIMS = [256]
-    VALUE_HEAD_HIDDEN_DIMS = [256]
+    FEATURE_DIM = FeatureConfig.FEATURE_DIM
+    LEGAL_ACTION_DIM = 85
+    LABEL_SIZE_LIST = [12, 16, 16, 16, 16, 9]
+    LABEL_SUM = sum(LABEL_SIZE_LIST)
     DATA_SPLIT_SHAPE = [
-        10 + 85,
+        FEATURE_DIM + LEGAL_ACTION_DIM,
         1,
         1,
         1,
@@ -70,13 +68,12 @@ class Config:
         LSTM_UNIT_SIZE,
         LSTM_UNIT_SIZE,
     ]
-    SERI_VEC_SPLIT_SHAPE = [(10,), (85,)]
+    SERI_VEC_SPLIT_SHAPE = [(FEATURE_DIM,), (LEGAL_ACTION_DIM,)]
     INIT_LEARNING_RATE_START = 1e-3
     TARGET_LR = 1e-4
     TARGET_STEP = 5000
     BETA_START = 0.025
     LOG_EPSILON = 1e-6
-    LABEL_SIZE_LIST = [12, 16, 16, 16, 16, 9]
     IS_REINFORCE_TASK_LIST = [
         True,
         True,
@@ -92,32 +89,12 @@ class Config:
 
     TARGET_EMBED_DIM = 32
 
-    data_shapes = [
-        [(10 + 85) * 16],
-        [16],
-        [16],
-        [16],
-        [16],
-        [16],
-        [16],
-        [16],
-        [16],
-        [192],
-        [256],
-        [256],
-        [256],
-        [256],
-        [144],
-        [16],
-        [16],
-        [16],
-        [16],
-        [16],
-        [16],
-        [16],
-        [512],
-        [512],
-    ]
+    data_shapes = []
+    for _i in range(len(DATA_SPLIT_SHAPE) - 2):
+        data_shapes.append([DATA_SPLIT_SHAPE[_i] * LSTM_TIME_STEPS])
+    data_shapes.append([LSTM_UNIT_SIZE])
+    data_shapes.append([LSTM_UNIT_SIZE])
+    del _i
 
     LEGAL_ACTION_SIZE_LIST = LABEL_SIZE_LIST.copy()
     LEGAL_ACTION_SIZE_LIST[-1] = LEGAL_ACTION_SIZE_LIST[-1] * LEGAL_ACTION_SIZE_LIST[0]
