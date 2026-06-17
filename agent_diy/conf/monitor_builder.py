@@ -10,6 +10,8 @@ Author: Tencent AI Arena Authors
 
 from kaiwudrl.common.monitor.monitor_config_builder import MonitorConfigBuilder
 
+from agent_diy.conf.conf import GameConfig
+
 
 def build_monitor():
     """
@@ -210,6 +212,42 @@ def build_monitor():
             .add_metric(metrics_name=en, expr="round(avg(%s{}), 1)" % en)
             .end_panel()
         )
+    builder = builder.end_group()
+
+    # ---- 攻击动作 target 联合分布诊断 ----
+    builder = builder.add_group(group_name="攻击目标联合分布", group_name_en="attack_target_joint")
+    for bucket, cn in [
+        ("none", "None"),
+        ("enemy_hero", "敌英雄"),
+        ("self", "自身"),
+        ("minion", "小兵"),
+        ("tower", "塔"),
+        ("monster", "野怪"),
+        ("other", "其他"),
+    ]:
+        cnt = "attack_action_target_%s_cnt" % bucket
+        rate = "attack_action_target_%s_rate" % bucket
+        builder = (
+            builder.add_panel(name="攻击目标%s次数" % cn, name_en=cnt, type="line", unit="")
+            .add_metric(metrics_name=cnt, expr="round(avg(%s{}), 1)" % cnt)
+            .end_panel()
+            .add_panel(name="攻击目标%s占比" % cn, name_en=rate, type="line", unit="")
+            .add_metric(metrics_name=rate, expr="round(avg(%s{}), 4)" % rate)
+            .end_panel()
+        )
+    for button in GameConfig.ATTACK_BUTTONS:
+        for target in range(9):
+            en = "attack_button_%d_target_%d" % (button, target)
+            builder = (
+                builder.add_panel(
+                    name="攻击Button%d-Target%d" % (button, target),
+                    name_en=en,
+                    type="line",
+                    unit="",
+                )
+                .add_metric(metrics_name=en, expr="round(avg(%s{}), 1)" % en)
+                .end_panel()
+            )
     builder = builder.end_group()
 
     # ---- 挂机检测健康度 ----

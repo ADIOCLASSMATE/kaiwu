@@ -125,6 +125,16 @@ class GameRewardManager:
             "monster": 0,
             "other": 0,
         }
+        self._attack_action_target_counts = {
+            "none": 0,
+            "enemy_hero": 0,
+            "self": 0,
+            "minion": 0,
+            "tower": 0,
+            "monster": 0,
+            "other": 0,
+        }
+        self._attack_button_target_counts = [[0] * 9 for _ in range(12)]
         self._last_hit_window_cnt = 0
         self._last_hit_window_attack_cnt = 0
         self._frontline_presence_cnt = 0
@@ -176,7 +186,13 @@ class GameRewardManager:
 
     def set_distance_penalty(self, action, decided_frame_state):
         """由 workflow 在 predict/exploit 后调用，注入当前 action 的距离惩罚。"""
-        if action is not None and len(action) >= 1 and action[0] in GameConfig.ATTACK_BUTTONS:
+        button = None
+        if action is not None and len(action) >= 1:
+            try:
+                button = int(action[0])
+            except (TypeError, ValueError):
+                button = None
+        if button in GameConfig.ATTACK_BUTTONS:
             self._attack_action_cnt += 1
         self._record_action_stats(action, decided_frame_state)
         self._distance_penalty = self.out_of_range_penalty(action, decided_frame_state)
@@ -204,20 +220,14 @@ class GameRewardManager:
             self._action_button_counts[button] += 1
         if 0 <= target < len(self._action_target_counts):
             self._action_target_counts[target] += 1
-        bucket = "other"
-        if target == 0:
-            bucket = "none"
-        elif target == 1:
-            bucket = "enemy_hero"
-        elif target == 2:
-            bucket = "self"
-        elif 3 <= target <= 6:
-            bucket = "minion"
-        elif target == 7:
-            bucket = "tower"
-        elif target == 8:
-            bucket = "monster"
+        bucket = self._target_bucket(target)
         self._attack_target_counts[bucket] = self._attack_target_counts.get(bucket, 0) + 1
+        if button in GameConfig.ATTACK_BUTTONS:
+            self._attack_action_target_counts[bucket] = (
+                self._attack_action_target_counts.get(bucket, 0) + 1
+            )
+            if 0 <= button < len(self._attack_button_target_counts) and 0 <= target < 9:
+                self._attack_button_target_counts[button][target] += 1
 
         if self._has_last_hit_window(decided_frame_state):
             self._last_hit_window_cnt += 1
@@ -226,6 +236,22 @@ class GameRewardManager:
                 and self._target_is_low_hp_enemy_minion(decided_frame_state, target)
             ):
                 self._last_hit_window_attack_cnt += 1
+
+    @staticmethod
+    def _target_bucket(target):
+        if target == 0:
+            return "none"
+        if target == 1:
+            return "enemy_hero"
+        if target == 2:
+            return "self"
+        if 3 <= target <= 6:
+            return "minion"
+        if target == 7:
+            return "tower"
+        if target == 8:
+            return "monster"
+        return "other"
 
     def tower_attack_reward(self, action, decided_frame_state):
         """Return 1.0 for a safe, in-range tower attack choice; else 0.0."""
@@ -325,6 +351,16 @@ class GameRewardManager:
             stats[f"action_target_{idx}"] = value
         for key, value in self._attack_target_counts.items():
             stats[f"attack_target_{key}"] = value
+        for key, value in self._attack_action_target_counts.items():
+            stats[f"attack_action_target_{key}_cnt"] = value
+            stats[f"attack_action_target_{key}_rate"] = round(
+                value / attack_cnt if attack_cnt > 0 else 0.0,
+                4,
+            )
+        for button in GameConfig.ATTACK_BUTTONS:
+            row = self._attack_button_target_counts[button]
+            for target, value in enumerate(row):
+                stats[f"attack_button_{button}_target_{target}"] = value
         self._attack_action_cnt = 0
         self._out_of_range_cnt = 0
         self._out_of_range_sum = 0.0
@@ -341,6 +377,16 @@ class GameRewardManager:
             "monster": 0,
             "other": 0,
         }
+        self._attack_action_target_counts = {
+            "none": 0,
+            "enemy_hero": 0,
+            "self": 0,
+            "minion": 0,
+            "tower": 0,
+            "monster": 0,
+            "other": 0,
+        }
+        self._attack_button_target_counts = [[0] * 9 for _ in range(12)]
         self._last_hit_window_cnt = 0
         self._last_hit_window_attack_cnt = 0
         self._frontline_presence_cnt = 0
