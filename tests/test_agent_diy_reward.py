@@ -1003,6 +1003,36 @@ class RewardDesignTests(unittest.TestCase):
         self.assertEqual(stats["action_target_3"], 1)
         self.assertEqual(stats["attack_target_minion"], 1)
 
+    def test_attack_action_target_joint_monitor_stats(self):
+        frame = make_frame(
+            main=make_hero(MAIN_ID, 1, hp=1000, attack_range=5000, x=0),
+            enemy=make_hero(ENEMY_ID, 2, hp=1000, x=9000),
+            npcs=[
+                make_tower(1, x=-15000),
+                make_tower(2, x=15000),
+                make_minion(401, 2, hp=150, x=1000),
+            ],
+        )
+
+        self.manager.set_distance_penalty([3, 0, 0, 0, 0, 0], frame)
+        self.manager.set_distance_penalty([4, 0, 0, 0, 0, 3], frame)
+        self.manager.set_distance_penalty([5, 0, 0, 0, 0, 1], frame)
+        self.manager.set_distance_penalty([0, 0, 0, 0, 0, 0], frame)
+        self.manager.result(frame)
+        stats = self.manager.consume_monitor_stats()
+
+        self.assertEqual(stats["attack_action_cnt"], 3)
+        self.assertEqual(stats["attack_action_target_none_cnt"], 1)
+        self.assertEqual(stats["attack_action_target_minion_cnt"], 1)
+        self.assertEqual(stats["attack_action_target_enemy_hero_cnt"], 1)
+        self.assertEqual(stats["attack_action_target_none_rate"], 0.3333)
+        self.assertEqual(stats["attack_action_target_minion_rate"], 0.3333)
+        self.assertEqual(stats["attack_action_target_enemy_hero_rate"], 0.3333)
+        self.assertEqual(stats["attack_button_3_target_0"], 1)
+        self.assertEqual(stats["attack_button_4_target_3"], 1)
+        self.assertEqual(stats["attack_button_5_target_1"], 1)
+        self.assertEqual(stats["attack_button_3_target_3"], 0)
+
     def test_tower_attack_reward_is_one_shot_when_safe_and_in_range(self):
         frame = make_frame(
             main=make_hero(MAIN_ID, 1, hp=1000, attack_range=1200, x=14500),

@@ -101,6 +101,20 @@ class AgentDiyMonitorTests(unittest.TestCase):
                 "attack_target_other",
             }
         )
+        for bucket in (
+            "none",
+            "enemy_hero",
+            "self",
+            "minion",
+            "tower",
+            "monster",
+            "other",
+        ):
+            expected.add(f"attack_action_target_{bucket}_cnt")
+            expected.add(f"attack_action_target_{bucket}_rate")
+        for button in GameConfig.ATTACK_BUTTONS:
+            for target in range(9):
+                expected.add(f"attack_button_{button}_target_{target}")
         manager = GameRewardManager(main_hero_runtime_id=101)
 
         self.assertEqual(expected - metrics, set())
