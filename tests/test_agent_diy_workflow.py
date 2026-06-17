@@ -157,6 +157,8 @@ class AgentDiyWorkflowTests(unittest.TestCase):
 
     def test_prepare_episode_opponent_writes_selected_agent_before_reset(self):
         runner = self._runner()
+        runner.train_opponent_mix["selfplay"] = 0.0
+        runner.train_opponent_mix["common_ai"] = 1.0
         usr_conf = {"episode": {"opponent_agent": "selfplay"}}
 
         selected = runner._prepare_episode_opponent(

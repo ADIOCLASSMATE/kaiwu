@@ -96,12 +96,12 @@ class EpisodeRunner:
             "model_pool": 0.0,
             "common_ai_low_win_rate": 0.05,
             "common_ai_high_win_rate": 0.25,
-            "low_win_selfplay": 0.7,
-            "low_win_common_ai": 0.3,
-            "mid_win_selfplay": 0.6,
-            "mid_win_common_ai": 0.4,
-            "high_win_selfplay": 0.4,
-            "high_win_common_ai": 0.6,
+            "low_win_selfplay": 0.4,
+            "low_win_common_ai": 0.6,
+            "mid_win_selfplay": 0.35,
+            "mid_win_common_ai": 0.65,
+            "high_win_selfplay": 0.5,
+            "high_win_common_ai": 0.5,
         }
         try:
             with open(config_path, "rb") as f:
@@ -181,15 +181,18 @@ class EpisodeRunner:
         win_rate = self._common_ai_win_rate(training_metrics)
         low_threshold = cfg.get("common_ai_low_win_rate", 0.05)
         high_threshold = cfg.get("common_ai_high_win_rate", 0.25)
-        if win_rate is None or win_rate < low_threshold:
-            cfg["selfplay"] = cfg.get("low_win_selfplay", 0.7)
-            cfg["common_ai"] = cfg.get("low_win_common_ai", 0.3)
+        if win_rate is None:
+            cfg["selfplay"] = cfg.get("selfplay", 0.5)
+            cfg["common_ai"] = cfg.get("common_ai", 0.5)
+        elif win_rate < low_threshold:
+            cfg["selfplay"] = cfg.get("low_win_selfplay", 0.4)
+            cfg["common_ai"] = cfg.get("low_win_common_ai", 0.6)
         elif win_rate < high_threshold:
-            cfg["selfplay"] = cfg.get("mid_win_selfplay", 0.6)
-            cfg["common_ai"] = cfg.get("mid_win_common_ai", 0.4)
+            cfg["selfplay"] = cfg.get("mid_win_selfplay", 0.35)
+            cfg["common_ai"] = cfg.get("mid_win_common_ai", 0.65)
         else:
-            cfg["selfplay"] = cfg.get("high_win_selfplay", 0.4)
-            cfg["common_ai"] = cfg.get("high_win_common_ai", 0.6)
+            cfg["selfplay"] = cfg.get("high_win_selfplay", 0.5)
+            cfg["common_ai"] = cfg.get("high_win_common_ai", 0.5)
         self.logger.info(
             f"dynamic train opponent mix: common_ai_win_rate={win_rate}, "
             f"selfplay={cfg['selfplay']}, common_ai={cfg['common_ai']}"
