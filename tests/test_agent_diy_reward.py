@@ -1,6 +1,8 @@
 import copy
 import unittest
 
+import numpy as np
+
 from agent_diy.conf.conf import GameConfig
 from agent_diy.feature.reward_process import GameRewardManager
 from tests.feature_test_utils import load_obs
@@ -978,6 +980,28 @@ class RewardDesignTests(unittest.TestCase):
         self.assertEqual(stats["last_hit_window_cnt"], 1)
         self.assertEqual(stats["last_hit_window_attack_rate"], 1.0)
         self.assertIn("frontline_presence_rate", stats)
+
+    def test_action_monitor_stats_accept_numpy_action_scalars(self):
+        frame = make_frame(
+            main=make_hero(MAIN_ID, 1, hp=1000, attack_range=5000, x=0),
+            enemy=make_hero(ENEMY_ID, 2, hp=1000, x=9000),
+            npcs=[
+                make_tower(1, x=-15000),
+                make_tower(2, x=15000),
+                make_minion(401, 2, hp=150, x=1000),
+            ],
+        )
+
+        self.manager.set_distance_penalty(
+            [np.int64(3), 0, 0, 0, 0, np.int64(3)],
+            frame,
+        )
+        self.manager.result(frame)
+        stats = self.manager.consume_monitor_stats()
+
+        self.assertEqual(stats["action_button_3"], 1)
+        self.assertEqual(stats["action_target_3"], 1)
+        self.assertEqual(stats["attack_target_minion"], 1)
 
     def test_tower_attack_reward_is_one_shot_when_safe_and_in_range(self):
         frame = make_frame(
