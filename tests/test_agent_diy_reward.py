@@ -123,6 +123,7 @@ class RewardDesignTests(unittest.TestCase):
             {
                 "tower_hp_point",
                 "lane_progress",
+                "lane_presence",
                 "retreat_recover",
                 "hp_point",
                 "danger_penalty",
@@ -131,6 +132,7 @@ class RewardDesignTests(unittest.TestCase):
                 "money",
                 "exp",
                 "last_hit",
+                "last_hit_focus",
                 "minion_hp_point",
                 "kill_monster",
                 "idle_penalty",
@@ -149,6 +151,11 @@ class RewardDesignTests(unittest.TestCase):
         self.assertLess(
             GameConfig.REWARD_WEIGHT_DICT["minion_hp_point"],
             GameConfig.REWARD_WEIGHT_DICT["hp_point"],
+        )
+        self.assertLessEqual(
+            GameConfig.LANE_PRESENCE_MAX_PER_EPISODE
+            * GameConfig.REWARD_WEIGHT_DICT["lane_presence"],
+            2.0,
         )
 
     def test_first_frame_has_no_artificial_shaping_reward(self):
@@ -391,7 +398,7 @@ class RewardDesignTests(unittest.TestCase):
         self.assertAlmostEqual(reward["minion_hp_point"], -0.2)
         self.assertAlmostEqual(
             reward["minion_hp_point"] * GameConfig.REWARD_WEIGHT_DICT["minion_hp_point"],
-            -0.08,
+            -0.02,
         )
 
     def test_minion_hp_point_ignores_non_hero_lane_damage_to_own_minions(self):
@@ -578,6 +585,92 @@ class RewardDesignTests(unittest.TestCase):
         death_reward = death_manager.result(death)
 
         self.assertGreater(recovered_reward["reward_sum"], death_reward["reward_sum"])
+
+    def test_full_hp_backfield_inactivity_is_worse_than_safe_frontline_presence(self):
+        backfield_manager = GameRewardManager(MAIN_ID)
+        backfield = make_frame(
+            main=make_hero(MAIN_ID, 1, hp=1000, max_hp=1000, x=-23000),
+            enemy=make_hero(ENEMY_ID, 2, hp=1000, max_hp=1000, x=10000),
+        )
+        backfield_manager.result(backfield)
+        backfield_total = 0.0
+        for frame_no in range(1, GameConfig.IDLE_GRACE_FRAMES + 20):
+            step = copy.deepcopy(backfield)
+            step["frame_no"] = frame_no
+            backfield_total += backfield_manager.result(step)["reward_sum"]
+
+        frontline_manager = GameRewardManager(MAIN_ID)
+        frontline = make_frame(
+            main=make_hero(MAIN_ID, 1, hp=1000, max_hp=1000, x=-1000),
+            enemy=make_hero(ENEMY_ID, 2, hp=1000, max_hp=1000, x=9000),
+            npcs=[
+                make_tower(1, x=-15000),
+                make_tower(2, x=15000),
+                make_minion(301, 1, hp=1000, x=-800),
+                make_minion(401, 2, hp=1000, x=800),
+            ],
+        )
+        frontline_manager.result(frontline)
+        frontline_total = 0.0
+        for frame_no in range(1, 80):
+            step = copy.deepcopy(frontline)
+            step["frame_no"] = frame_no
+            frontline_total += frontline_manager.result(step)["reward_sum"]
+
+        self.assertLess(backfield_total, 0.0)
+        self.assertGreater(frontline_total, 0.0)
+        self.assertGreater(frontline_total, backfield_total)
+
+    def test_low_hp_retreat_zone_recovery_freezes_idle_but_full_hp_backfield_does_not(self):
+        low_hp_manager = GameRewardManager(MAIN_ID)
+        low_hp = make_frame(
+            main=make_hero(MAIN_ID, 1, hp=300, max_hp=1000, x=-23000),
+            enemy=make_hero(ENEMY_ID, 2, hp=1000, max_hp=1000, x=10000),
+        )
+        low_hp_manager.result(low_hp)
+        for frame_no in range(1, GameConfig.IDLE_GRACE_FRAMES + 10):
+            step = copy.deepcopy(low_hp)
+            step["frame_no"] = frame_no
+            low_hp_reward = low_hp_manager.result(step)
+
+        full_hp_manager = GameRewardManager(MAIN_ID)
+        full_hp = make_frame(
+            main=make_hero(MAIN_ID, 1, hp=1000, max_hp=1000, x=-23000),
+            enemy=make_hero(ENEMY_ID, 2, hp=1000, max_hp=1000, x=10000),
+        )
+        full_hp_manager.result(full_hp)
+        for frame_no in range(1, GameConfig.IDLE_GRACE_FRAMES + 10):
+            step = copy.deepcopy(full_hp)
+            step["frame_no"] = frame_no
+            full_hp_reward = full_hp_manager.result(step)
+
+        self.assertEqual(low_hp_reward["idle_penalty"], 0.0)
+        self.assertGreater(full_hp_reward["idle_penalty"], 0.0)
+
+    def test_last_hit_focus_prefers_low_hp_minion_target_over_wrong_attack(self):
+        frame = make_frame(
+            main=make_hero(MAIN_ID, 1, hp=1000, max_hp=1000, attack_range=5000, x=0),
+            enemy=make_hero(ENEMY_ID, 2, hp=1000, max_hp=1000, x=9000),
+            npcs=[
+                make_tower(1, x=-15000),
+                make_tower(2, x=15000),
+                make_minion(401, 2, hp=150, x=1000),
+                make_minion(402, 2, hp=900, x=2000),
+            ],
+        )
+        correct_manager = GameRewardManager(MAIN_ID)
+        correct_manager.result(frame)
+        correct_manager.set_distance_penalty([3, 0, 0, 0, 0, 3], frame)
+        correct_reward = correct_manager.result({**copy.deepcopy(frame), "frame_no": 1})
+
+        wrong_manager = GameRewardManager(MAIN_ID)
+        wrong_manager.result(frame)
+        wrong_manager.set_distance_penalty([3, 0, 0, 0, 0, 1], frame)
+        wrong_reward = wrong_manager.result({**copy.deepcopy(frame), "frame_no": 1})
+
+        self.assertGreater(correct_reward["last_hit_focus"], 0.0)
+        self.assertLess(wrong_reward["last_hit_focus"], 0.0)
+        self.assertGreater(correct_reward["reward_sum"], wrong_reward["reward_sum"])
 
     def test_low_hp_in_enemy_threat_area_is_penalized(self):
         initial = make_frame(
@@ -863,6 +956,28 @@ class RewardDesignTests(unittest.TestCase):
             -GameConfig.OUT_OF_RANGE_PENALTY,
         )
         self.assertEqual(next_reward["distance_penalty"], 0.0)
+
+    def test_action_monitor_stats_include_button_target_and_last_hit_window_rates(self):
+        frame = make_frame(
+            main=make_hero(MAIN_ID, 1, hp=1000, attack_range=5000, x=0),
+            enemy=make_hero(ENEMY_ID, 2, hp=1000, x=9000),
+            npcs=[
+                make_tower(1, x=-15000),
+                make_tower(2, x=15000),
+                make_minion(401, 2, hp=150, x=1000),
+            ],
+        )
+
+        self.manager.set_distance_penalty([3, 0, 0, 0, 0, 3], frame)
+        self.manager.result(frame)
+        stats = self.manager.consume_monitor_stats()
+
+        self.assertEqual(stats["action_button_3"], 1)
+        self.assertEqual(stats["action_target_3"], 1)
+        self.assertEqual(stats["attack_target_minion"], 1)
+        self.assertEqual(stats["last_hit_window_cnt"], 1)
+        self.assertEqual(stats["last_hit_window_attack_rate"], 1.0)
+        self.assertIn("frontline_presence_rate", stats)
 
     def test_tower_attack_reward_is_one_shot_when_safe_and_in_range(self):
         frame = make_frame(

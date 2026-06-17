@@ -3,6 +3,7 @@
 
 import importlib.util
 import sys
+import tomllib
 import types
 import unittest
 from pathlib import Path
@@ -200,6 +201,20 @@ class AgentDiyWorkflowTests(unittest.TestCase):
         self.assertEqual(runner.agents[1].loaded, [])
         self.assertEqual(runner.do_predicts, [True, False])
         self.assertEqual(runner.do_samples, [True, False])
+
+    def test_training_opponent_curriculum_starts_mostly_selfplay(self):
+        config_path = (
+            Path(__file__).resolve().parents[1]
+            / "agent_diy/conf/train_env_conf.toml"
+        )
+        with open(config_path, "rb") as f:
+            config = tomllib.load(f)
+
+        mix = config["episode"]["train_opponent_mix"]
+        self.assertTrue(mix["enable"])
+        self.assertEqual(mix["selfplay"], 0.8)
+        self.assertEqual(mix["common_ai"], 0.2)
+        self.assertEqual(config["episode"]["eval_opponent_type"], "common_ai")
 
 
 if __name__ == "__main__":

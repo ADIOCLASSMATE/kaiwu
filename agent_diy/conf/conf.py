@@ -67,6 +67,7 @@ class GameConfig:
     REWARD_WEIGHT_DICT = {
         "tower_hp_point": 1.2,      # 双方外塔血量优势变化，越塔/无兵线推塔时折价
         "lane_progress": 2.0,       # 安全时泉水到己方神符的前进势能差分，小上限探索引导
+        "lane_presence": 1.0,       # 安全前场/兵线存在感；满血后场无产出小惩罚
         "retreat_recover": 1.0,     # 危险局面下合理回撤/回血的小奖励，有整局上限
         "hp_point": 4.0,            # 英雄对英雄伤害优势变化，只奖励自己打出的压制
         "danger_penalty": -1.0,     # 低血仍在敌英雄/敌塔威胁区的逐帧惩罚
@@ -75,7 +76,8 @@ class GameConfig:
         "money": 0.8,               # 累计经济 money_cnt 优势变化
         "exp": 0.8,                 # 跨等级累计经验优势变化
         "last_hit": 1.0,            # dead_action 中英雄真实补刀/阻止敌方补刀事件
-        "minion_hp_point": 0.4,     # 敌方英雄攻击己方兵的小惩罚；不奖励无脑清线
+        "last_hit_focus": 1.0,      # 补刀窗口内点低血兵的小动作奖励/点错目标小惩罚
+        "minion_hp_point": 0.1,     # 敌方英雄攻击己方兵的小惩罚；不奖励无脑清线
         "kill_monster": 0.3,        # dead_action 中中立野怪归属
         "idle_penalty": -0.1,       # 长时间停滞后的渐进式每帧惩罚
         "tower_attack": 0.02,       # 安全压塔时选择点塔动作的小奖励
@@ -112,6 +114,12 @@ class GameConfig:
     LANE_GUIDANCE_FALLBACK_CAKE_T = -0.08
     LANE_PROGRESS_MAX_PER_EPISODE = 1.0
     LANE_PROGRESS_MIN_PER_EPISODE = -0.5
+    LANE_PRESENCE_STEP = 0.01
+    LANE_PRESENCE_BACKFIELD_STEP = 0.015
+    LANE_PRESENCE_MAX_PER_EPISODE = 2.0
+    LANE_PRESENCE_MIN_PER_EPISODE = -2.0
+    LANE_PRESENCE_FRONT_MIN_T = -0.12
+    LANE_PRESENCE_FRONT_MAX_T = 0.55
 
     # ---- 危险回撤/回血小奖励 ----
     # 总量必须显著小于前场打出换血/补刀收益，但要优于继续硬操作送死。
@@ -124,6 +132,13 @@ class GameConfig:
     RETREAT_LOW_HP_THRESHOLD = 0.50
     RETREAT_ENEMY_HP_ADVANTAGE = 0.25
 
+    # ---- 补刀窗口动作 shaping ----
+    LAST_HIT_FOCUS_HP_RATIO = 0.25
+    LAST_HIT_FOCUS_CORRECT = 0.08
+    LAST_HIT_FOCUS_WRONG = -0.04
+    LAST_HIT_FOCUS_MAX_PER_EPISODE = 3.0
+    LAST_HIT_FOCUS_MIN_PER_EPISODE = -1.5
+
     # ---- 挂机检测参数（纯产出停滞判据）----
     # 判据：经济(money_cnt)与对英雄伤害(total_hurt_to_hero)帧间增量同时停滞 → 累计 inactive。
     # 叠加「非回城/非泉水」豁免（冻结计数而非清零）：在己方塔后方的安全回撤/泉水区不罚。
@@ -135,6 +150,8 @@ class GameConfig:
     # 视为在己方塔后方安全区（回血/回城/泉水），冻结挂机计数。1.0=己方塔位置，
     # >1.0 表示更靠后。设为 1.05 给己方塔身前一点余量仍算"在场"。
     IDLE_RETREAT_RATIO = 1.05
+    IDLE_RETREAT_HP_FREEZE_THRESHOLD = 0.70
+    IDLE_HEALING_DELTA_THRESHOLD = 0.005
     # 挂机检测位置增量阈值：英雄帧间位移 > 此值则视为"有移动"，重置挂机计数。
     # 地图尺度 MAP_SCALE=46000，英雄移速 ~350，每帧(~1/30s)位移约 12 单位。
     # 设 30 约需 2-3 帧连续移动才能重置；过滤掉贴墙卡住的微小抖动。

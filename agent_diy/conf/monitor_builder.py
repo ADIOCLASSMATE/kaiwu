@@ -135,6 +135,7 @@ def build_monitor():
     reward_items = [
         ("rwd_tower_hp_point", "塔血优势"),
         ("rwd_lane_progress", "安全上线引导"),
+        ("rwd_lane_presence", "安全前场存在"),
         ("rwd_retreat_recover", "危险回撤回血"),
         ("rwd_hp_point", "英雄伤害优势"),
         ("rwd_danger_penalty", "低血危险惩罚"),
@@ -143,6 +144,7 @@ def build_monitor():
         ("rwd_money", "累计经济优势"),
         ("rwd_exp", "累计经验优势"),
         ("rwd_last_hit", "英雄补刀"),
+        ("rwd_last_hit_focus", "补刀窗口动作"),
         ("rwd_minion_hp_point", "己方兵线保护"),
         ("rwd_kill_monster", "野怪控制"),
         ("rwd_idle_penalty", "挂机惩罚"),
@@ -165,12 +167,47 @@ def build_monitor():
         ("out_of_range_rate", "越程攻击占比", "0.0001"),
         ("out_of_range_sum", "越程惩罚累计", "0.001"),
         ("attack_action_cnt", "攻击动作次数", "1"),
+        ("last_hit_window_cnt", "补刀窗口帧数", "1"),
+        ("last_hit_window_attack_rate", "补刀窗口命中率", "0.0001"),
+        ("frontline_presence_rate", "前场存在率", "0.0001"),
     ]
     builder = builder.add_group(group_name="距离整形", group_name_en="distance_shaping")
     for en, cn, prec in shaping_items:
         builder = (
             builder.add_panel(name=cn, name_en=en, type="line", unit="")
             .add_metric(metrics_name=en, expr="round(avg(%s{}), %s)" % (en, prec))
+            .end_panel()
+        )
+    builder = builder.end_group()
+
+    # ---- action 分布诊断 ----
+    builder = builder.add_group(group_name="动作分布", group_name_en="action_distribution")
+    for idx in range(12):
+        en = "action_button_%d" % idx
+        builder = (
+            builder.add_panel(name="Button%d" % idx, name_en=en, type="line", unit="")
+            .add_metric(metrics_name=en, expr="round(avg(%s{}), 1)" % en)
+            .end_panel()
+        )
+    for idx in range(9):
+        en = "action_target_%d" % idx
+        builder = (
+            builder.add_panel(name="Target%d" % idx, name_en=en, type="line", unit="")
+            .add_metric(metrics_name=en, expr="round(avg(%s{}), 1)" % en)
+            .end_panel()
+        )
+    for en, cn in [
+        ("attack_target_none", "目标None"),
+        ("attack_target_enemy_hero", "目标敌英雄"),
+        ("attack_target_self", "目标自身"),
+        ("attack_target_minion", "目标小兵"),
+        ("attack_target_tower", "目标塔"),
+        ("attack_target_monster", "目标野怪"),
+        ("attack_target_other", "目标其他"),
+    ]:
+        builder = (
+            builder.add_panel(name=cn, name_en=en, type="line", unit="")
+            .add_metric(metrics_name=en, expr="round(avg(%s{}), 1)" % en)
             .end_panel()
         )
     builder = builder.end_group()

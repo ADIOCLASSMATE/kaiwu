@@ -12,11 +12,13 @@ Author: Tencent AI Arena Authors
   tower_hp_point, hp_point(英雄对英雄伤害), kill, money, exp
 非零和子项（仅主视角）：
   lane_progress（安全时从泉水/后场到己方神符的前进势能差分）、
+  lane_presence（安全前场/兵线存在感；满血后场无产出小惩罚）、
   retreat_recover（危险局面下合理回撤/回血的小奖励）、
   danger_penalty（低血仍处在敌方威胁区）、
   death（自身死亡增量）、
   minion_hp_point（可见敌方英雄攻击己方小兵造成的掉血惩罚）、
   last_hit / kill_monster（dead_action 事件归因）、
+  last_hit_focus（补刀窗口内点低血兵的小动作 shaping）、
   tower_attack（安全压塔窗口中选择点塔动作的小奖励）、
   idle_penalty（挂机惩罚：经济/伤害产出停滞且不在回撤/泉水区时累计，权重为负）
 
@@ -106,8 +108,26 @@ class GameRewardManager:
         self._terminal_applied = False
         self._lane_cake_anchor_by_camp = {}
         self._lane_progress_sum = 0.0
+        self._lane_presence_sum = 0.0
         self._retreat_recover_sum = 0.0
+        self._last_hit_focus_sum = 0.0
         self._retreat_need_memory = 0
+        self._last_hp_ratio = None
+        self._last_hit_focus_event = 0.0
+        self._action_button_counts = [0] * 12
+        self._action_target_counts = [0] * 9
+        self._attack_target_counts = {
+            "none": 0,
+            "enemy_hero": 0,
+            "self": 0,
+            "minion": 0,
+            "tower": 0,
+            "monster": 0,
+            "other": 0,
+        }
+        self._last_hit_window_cnt = 0
+        self._last_hit_window_attack_cnt = 0
+        self._frontline_presence_cnt = 0
 
     def result(self, frame_data):
         self.frame_data_process(frame_data)
@@ -158,6 +178,7 @@ class GameRewardManager:
         """由 workflow 在 predict/exploit 后调用，注入当前 action 的距离惩罚。"""
         if action is not None and len(action) >= 1 and action[0] in GameConfig.ATTACK_BUTTONS:
             self._attack_action_cnt += 1
+        self._record_action_stats(action, decided_frame_state)
         self._distance_penalty = self.out_of_range_penalty(action, decided_frame_state)
         if self._distance_penalty < 0:
             self._out_of_range_cnt += 1
@@ -166,6 +187,41 @@ class GameRewardManager:
             action,
             decided_frame_state,
         )
+        self._last_hit_focus_event = self.last_hit_focus_reward(
+            action,
+            decided_frame_state,
+        )
+
+    def _record_action_stats(self, action, decided_frame_state):
+        if action is None or len(action) < 6:
+            return
+        button, target = action[0], action[5]
+        if isinstance(button, int) and 0 <= button < len(self._action_button_counts):
+            self._action_button_counts[button] += 1
+        if isinstance(target, int) and 0 <= target < len(self._action_target_counts):
+            self._action_target_counts[target] += 1
+        bucket = "other"
+        if target == 0:
+            bucket = "none"
+        elif target == 1:
+            bucket = "enemy_hero"
+        elif target == 2:
+            bucket = "self"
+        elif 3 <= target <= 6:
+            bucket = "minion"
+        elif target == 7:
+            bucket = "tower"
+        elif target == 8:
+            bucket = "monster"
+        self._attack_target_counts[bucket] = self._attack_target_counts.get(bucket, 0) + 1
+
+        if self._has_last_hit_window(decided_frame_state):
+            self._last_hit_window_cnt += 1
+            if (
+                button in GameConfig.ATTACK_BUTTONS
+                and self._target_is_low_hp_enemy_minion(decided_frame_state, target)
+            ):
+                self._last_hit_window_attack_cnt += 1
 
     def tower_attack_reward(self, action, decided_frame_state):
         """Return 1.0 for a safe, in-range tower attack choice; else 0.0."""
@@ -222,6 +278,19 @@ class GameRewardManager:
             return 0.0
         return 1.0
 
+    def last_hit_focus_reward(self, action, decided_frame_state):
+        """Small action reward for choosing a low-hp enemy minion in a last-hit window."""
+        if action is None or len(action) < 6:
+            return 0.0
+        button, target = action[0], action[5]
+        if button not in GameConfig.ATTACK_BUTTONS:
+            return 0.0
+        if not self._has_last_hit_window(decided_frame_state):
+            return 0.0
+        if self._target_is_low_hp_enemy_minion(decided_frame_state, target):
+            return GameConfig.LAST_HIT_FOCUS_CORRECT
+        return GameConfig.LAST_HIT_FOCUS_WRONG
+
     def consume_monitor_stats(self):
         """Return per-episode reward health stats and reset their counters."""
         attack_cnt = self._attack_action_cnt
@@ -235,12 +304,42 @@ class GameRewardManager:
             "attack_action_cnt": attack_cnt,
             "idle_triggered": self._idle_triggered_cnt,
             "idle_triggered_rate": round(idle_triggered_rate, 4),
+            "last_hit_window_cnt": self._last_hit_window_cnt,
+            "last_hit_window_attack_rate": round(
+                self._last_hit_window_attack_cnt / self._last_hit_window_cnt
+                if self._last_hit_window_cnt > 0 else 0.0,
+                4,
+            ),
+            "frontline_presence_rate": round(
+                self._frontline_presence_cnt / frame_cnt if frame_cnt > 0 else 0.0,
+                4,
+            ),
         }
+        for idx, value in enumerate(self._action_button_counts):
+            stats[f"action_button_{idx}"] = value
+        for idx, value in enumerate(self._action_target_counts):
+            stats[f"action_target_{idx}"] = value
+        for key, value in self._attack_target_counts.items():
+            stats[f"attack_target_{key}"] = value
         self._attack_action_cnt = 0
         self._out_of_range_cnt = 0
         self._out_of_range_sum = 0.0
         self._reward_frame_cnt = 0
         self._idle_triggered_cnt = 0
+        self._action_button_counts = [0] * 12
+        self._action_target_counts = [0] * 9
+        self._attack_target_counts = {
+            "none": 0,
+            "enemy_hero": 0,
+            "self": 0,
+            "minion": 0,
+            "tower": 0,
+            "monster": 0,
+            "other": 0,
+        }
+        self._last_hit_window_cnt = 0
+        self._last_hit_window_attack_cnt = 0
+        self._frontline_presence_cnt = 0
         return stats
 
     # ---- distance shaping 辅助：定位主英雄 / 敌英雄 / 第 k 近敌方小兵 / 最近野怪 ----
@@ -272,6 +371,44 @@ class GameRewardManager:
             visible_fn=visible_to_camp,
         )
         return ordered[k]["pos"] if k < len(ordered) else None
+
+    def _low_hp_enemy_minion_slots(self, fs):
+        mh = self._main_hero(fs)
+        if mh is None:
+            return set()
+        mpos = (mh["location"]["x"], mh["location"]["z"])
+        attack_range = float(mh.get("attack_range", 0) or 0)
+        if attack_range <= 0:
+            return set()
+        ordered = target_slot_enemy_soldiers(
+            fs.get("npc_states", []),
+            mpos,
+            mh["camp"],
+            FC.N_MINION_PER_CAMP,
+            visible_fn=visible_to_camp,
+        )
+        slots = set()
+        for idx, soldier in enumerate(ordered):
+            pos = soldier.get("pos")
+            npc = soldier.get("unit") or soldier
+            if pos is None:
+                continue
+            max_hp = float(npc.get("max_hp", 0) or 0)
+            if max_hp <= 0:
+                continue
+            hp_ratio = float(npc.get("hp", 0) or 0) / max_hp
+            if (
+                hp_ratio <= GameConfig.LAST_HIT_FOCUS_HP_RATIO
+                and math.dist(mpos, pos) <= attack_range
+            ):
+                slots.add(3 + idx)
+        return slots
+
+    def _has_last_hit_window(self, fs):
+        return bool(self._low_hp_enemy_minion_slots(fs))
+
+    def _target_is_low_hp_enemy_minion(self, fs, target):
+        return target in self._low_hp_enemy_minion_slots(fs)
 
     def _nearest_monster_pos(self, fs):
         mh = self._main_hero(fs)
@@ -382,6 +519,18 @@ class GameRewardManager:
                 enemy_camp = 2 if camp == 1 else 1
                 enemy_hero, enemy_tower = self._get_camp_units(frame_data, enemy_camp)
                 rs.cur_frame_value = self.calculate_lane_guidance_potential(
+                    frame_data,
+                    camp,
+                    main_hero,
+                    main_tower,
+                    enemy_hero,
+                    enemy_tower,
+                )
+            elif reward_name == "lane_presence":
+                main_hero, main_tower = self._get_camp_units(frame_data, camp)
+                enemy_camp = 2 if camp == 1 else 1
+                enemy_hero, enemy_tower = self._get_camp_units(frame_data, enemy_camp)
+                rs.cur_frame_value = self.calculate_lane_presence_state(
                     frame_data,
                     camp,
                     main_hero,
@@ -511,6 +660,88 @@ class GameRewardManager:
                 ):
                     return False
         return True
+
+    def calculate_lane_presence_state(
+        self,
+        frame_data,
+        camp,
+        main_hero,
+        main_tower,
+        enemy_hero,
+        enemy_tower,
+    ):
+        if main_hero is None or main_tower is None or enemy_tower is None:
+            return {
+                "frontline": False,
+                "backfield_idle": False,
+            }
+        lane_t = self._hero_lane_t(main_hero, main_tower, enemy_tower)
+        if lane_t is None:
+            return {
+                "frontline": False,
+                "backfield_idle": False,
+            }
+        healthy = self._raw_hp_ratio(main_hero) >= GameConfig.LANE_GUIDANCE_HP_THRESHOLD
+        safe = healthy and self._is_lane_guidance_safe(
+            frame_data,
+            main_hero,
+            enemy_hero,
+            enemy_tower,
+            camp,
+        )
+        frontline = (
+            safe
+            and GameConfig.LANE_PRESENCE_FRONT_MIN_T
+            <= lane_t
+            <= GameConfig.LANE_PRESENCE_FRONT_MAX_T
+            and self._near_lane_presence_unit(frame_data, camp, main_hero)
+        )
+        retreat_need = self.calculate_retreat_need(
+            frame_data,
+            camp,
+            main_hero,
+            enemy_hero,
+            enemy_tower,
+        )
+        backfield_idle = (
+            self._raw_hp_ratio(main_hero) >= GameConfig.IDLE_RETREAT_HP_FREEZE_THRESHOLD
+            and retreat_need <= 0
+            and self._retreat_need_memory <= 0
+            and self._in_retreat_zone(frame_data, main_hero, camp)
+        )
+        return {
+            "frontline": frontline,
+            "backfield_idle": backfield_idle,
+        }
+
+    def _near_lane_presence_unit(self, frame_data, main_camp, main_hero):
+        loc = main_hero.get("location", {})
+        if self._is_sentinel(loc):
+            return False
+        hero_pos = (loc["x"], loc["z"])
+        for npc in frame_data.get("npc_states", []):
+            if not (
+                npc.get("actor_type") == MINION_ACTOR_TYPE
+                and npc.get("sub_type") == MINION_SUBTYPE
+                and npc.get("hp", 0) > 0
+            ):
+                continue
+            nloc = npc.get("location", {})
+            if self._is_sentinel(nloc):
+                continue
+            if math.dist(hero_pos, (nloc["x"], nloc["z"])) <= 6500:
+                return True
+        enemy_hero = next(
+            (item for item in frame_data.get("hero_states", [])
+             if item.get("camp") != main_camp and item.get("hp", 0) > 0),
+            None,
+        )
+        if enemy_hero is None or not visible_to_camp(enemy_hero, main_camp):
+            return False
+        eloc = enemy_hero.get("location", {})
+        if self._is_sentinel(eloc):
+            return False
+        return math.dist(hero_pos, (eloc["x"], eloc["z"])) <= 8000
 
     def calculate_retreat_recover_state(
         self,
@@ -767,6 +998,12 @@ class GameRewardManager:
                       if h.get("camp") == main_camp and h.get("hp", 0) > 0), 0)
             )
             self._last_pos = self._get_main_hero_pos(frame_data, main_camp)
+            hero = next(
+                (h for h in frame_data.get("hero_states", [])
+                 if h.get("camp") == main_camp and h.get("hp", 0) > 0),
+                None,
+            )
+            self._last_hp_ratio = self._raw_hp_ratio(hero)
         self._update_inactive(frame_data, main_camp)
 
     def _objective_events(self, frame_data, main_camp, enemy_camp):
@@ -904,24 +1141,41 @@ class GameRewardManager:
             pos_moved = (dist > GameConfig.IDLE_POS_DELTA_THRESHOLD)
         self._last_pos = cur_pos
 
-        if pos_moved:
-            self._inactive_frames = 0
-            return
-
         cur_money = float(hero.get("money_cnt", 0))
         cur_hurt = float(hero.get("total_hurt_to_hero", 0))
+        cur_hp_ratio = self._raw_hp_ratio(hero)
+        hp_delta = 0.0 if self._last_hp_ratio is None else cur_hp_ratio - self._last_hp_ratio
         money_delta = cur_money - self._last_money_cnt
         hurt_delta = cur_hurt - self._last_hurt_to_hero
         self._last_money_cnt = cur_money
         self._last_hurt_to_hero = cur_hurt
+        self._last_hp_ratio = cur_hp_ratio
 
         zero_output = (money_delta <= 0 and hurt_delta <= 0)
         if not zero_output:
             self._inactive_frames = 0
             return
-        if self._in_retreat_zone(frame_data, hero, main_camp):
+        recovery_freeze = self._should_freeze_idle_for_recovery(
+            frame_data,
+            hero,
+            main_camp,
+            hp_delta,
+        )
+        if recovery_freeze:
+            return
+        if pos_moved and not self._in_retreat_zone(frame_data, hero, main_camp):
+            self._inactive_frames = 0
             return
         self._inactive_frames += 1
+
+    def _should_freeze_idle_for_recovery(self, frame_data, hero, main_camp, hp_delta):
+        if not self._in_retreat_zone(frame_data, hero, main_camp):
+            return False
+        if self._raw_hp_ratio(hero) < GameConfig.IDLE_RETREAT_HP_FREEZE_THRESHOLD:
+            return True
+        if self._retreat_need_memory > 0:
+            return True
+        return hp_delta > GameConfig.IDLE_HEALING_DELTA_THRESHOLD
 
     def get_reward(self, frame_data, reward_dict):
         reward_dict.clear()
@@ -960,6 +1214,21 @@ class GameRewardManager:
                     GameConfig.LANE_PROGRESS_MIN_PER_EPISODE,
                     GameConfig.LANE_PROGRESS_MAX_PER_EPISODE,
                 )
+            elif reward_name == "lane_presence":
+                state = main.cur_frame_value
+                raw_value = 0.0
+                if self._reward_frame_cnt > 0 and isinstance(state, dict):
+                    if state.get("frontline"):
+                        raw_value = GameConfig.LANE_PRESENCE_STEP
+                        self._frontline_presence_cnt += 1
+                    elif state.get("backfield_idle"):
+                        raw_value = -GameConfig.LANE_PRESENCE_BACKFIELD_STEP
+                rs.value = self._consume_bounded_episode_budget(
+                    raw_value,
+                    "_lane_presence_sum",
+                    GameConfig.LANE_PRESENCE_MIN_PER_EPISODE,
+                    GameConfig.LANE_PRESENCE_MAX_PER_EPISODE,
+                )
             elif reward_name == "retreat_recover":
                 rs.value = self._retreat_recover_delta(
                     main.last_frame_value,
@@ -971,6 +1240,13 @@ class GameRewardManager:
                 rs.value = main.cur_frame_value - main.last_frame_value
             elif reward_name == "last_hit":
                 rs.value = self._last_hit_event
+            elif reward_name == "last_hit_focus":
+                rs.value = self._consume_bounded_episode_budget(
+                    self._last_hit_focus_event,
+                    "_last_hit_focus_sum",
+                    GameConfig.LAST_HIT_FOCUS_MIN_PER_EPISODE,
+                    GameConfig.LAST_HIT_FOCUS_MAX_PER_EPISODE,
+                )
             elif reward_name == "minion_hp_point":
                 rs.value = self._minion_hp_point_delta(
                     main.last_frame_value,
@@ -1000,6 +1276,7 @@ class GameRewardManager:
         reward_sum += self._distance_penalty
         self._distance_penalty = 0.0
         self._tower_attack_event = 0.0
+        self._last_hit_focus_event = 0.0
         reward_dict["reward_sum"] = reward_sum
         self._reward_frame_cnt += 1
         if reward_dict.get("idle_penalty", 0.0) > 0:

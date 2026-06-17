@@ -84,7 +84,23 @@ class AgentDiyMonitorTests(unittest.TestCase):
             "attack_action_cnt",
             "idle_triggered",
             "idle_triggered_rate",
+            "last_hit_window_cnt",
+            "last_hit_window_attack_rate",
+            "frontline_presence_rate",
         }
+        expected.update({f"action_button_{idx}" for idx in range(12)})
+        expected.update({f"action_target_{idx}" for idx in range(9)})
+        expected.update(
+            {
+                "attack_target_none",
+                "attack_target_enemy_hero",
+                "attack_target_self",
+                "attack_target_minion",
+                "attack_target_tower",
+                "attack_target_monster",
+                "attack_target_other",
+            }
+        )
         manager = GameRewardManager(main_hero_runtime_id=101)
 
         self.assertEqual(expected - metrics, set())
