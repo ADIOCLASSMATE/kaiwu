@@ -126,14 +126,26 @@ class Agent(BaseAgent):
         with torch.no_grad():
             output_list = self.model(format_inputs, inference=True)
 
-        np_output = [output.numpy() for output in output_list]
+        np_output = [output.detach().cpu().numpy() for output in output_list]
         logits, value, _lstm_cell, _lstm_hidden = np_output[:4]
+        target_logits_by_button = getattr(self.model, "target_logits_by_button", None)
+        if target_logits_by_button is not None:
+            target_logits_by_button = target_logits_by_button.detach().cpu().numpy()
         _lstm_cell = _lstm_cell.squeeze(axis=0)
         _lstm_hidden = _lstm_hidden.squeeze(axis=0)
 
         list_act_data = []
         for i in range(len(legal_action)):
-            prob, d_prob, action, d_action = self._sample_masked_action(logits[i], legal_action[i])
+            target_logits = (
+                target_logits_by_button[i]
+                if target_logits_by_button is not None and len(target_logits_by_button) > i
+                else None
+            )
+            prob, d_prob, action, d_action = self._sample_masked_action(
+                logits[i],
+                legal_action[i],
+                target_logits_by_button=target_logits,
+            )
             self.diagnostics.record_policy(
                 logits=logits[i],
                 legal_action=legal_action[i],
@@ -240,7 +252,7 @@ class Agent(BaseAgent):
         )
 
     # ---- 以下采样契约函数原样保留（不得改动语义）----
-    def _sample_masked_action(self, logits, legal_action):
+    def _sample_masked_action(self, logits, legal_action, target_logits_by_button=None):
         prob_list = []
         d_prob_list = []
         action_list = []
@@ -264,14 +276,23 @@ class Agent(BaseAgent):
         target_legal_action = np.sum(target_legal_action_o * one_hot_actions, axis=0)
 
         legal_actions[index] = target_legal_action
-        probs = self._legal_soft_max(logits_split[-1], target_legal_action)
+        if target_logits_by_button is not None:
+            target_logits_by_button = np.asarray(target_logits_by_button)
+            target_logits = target_logits_by_button[action_list[0]]
+        else:
+            target_logits = logits_split[-1]
+        probs = self._legal_soft_max(target_logits, target_legal_action)
         prob_list += list(probs)
         action_list.append(self._legal_sample(probs, use_max=False))
 
         one_hot_actions = np.eye(self.label_size_list[0])[d_action_list[0]]
         one_hot_actions = np.reshape(one_hot_actions, [self.label_size_list[0], 1])
         target_legal_action_d = np.sum(target_legal_action_o * one_hot_actions, axis=0)
-        probs = self._legal_soft_max(logits_split[-1], target_legal_action_d)
+        if target_logits_by_button is not None:
+            target_logits_d = target_logits_by_button[d_action_list[0]]
+        else:
+            target_logits_d = logits_split[-1]
+        probs = self._legal_soft_max(target_logits_d, target_legal_action_d)
         d_prob_list += list(probs)
         d_action_list.append(self._legal_sample(probs, use_max=True))
 

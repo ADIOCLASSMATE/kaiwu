@@ -115,6 +115,7 @@ class AgentDiyMonitorTests(unittest.TestCase):
         for button in GameConfig.ATTACK_BUTTONS:
             for target in range(9):
                 expected.add(f"attack_button_{button}_target_{target}")
+                expected.add(f"attack_button_{button}_target_{target}_rate")
         manager = GameRewardManager(main_hero_runtime_id=101)
 
         self.assertEqual(expected - metrics, set())

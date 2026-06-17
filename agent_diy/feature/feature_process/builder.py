@@ -758,6 +758,7 @@ class FeatureBuilder:
     def _global_feature(self, frame_no, main_hero, enemy_hero, own_tower, enemy_tower):
         g = []
         g.append(_clip01(frame_no / 20000.0))
+        g += self._game_time_onehot(frame_no)
 
         own_alive = 1.0 if (own_tower is not None and own_tower.get("hp", 0) > 0) else 0.0
         enemy_alive = 1.0 if (enemy_tower is not None and enemy_tower.get("hp", 0) > 0) else 0.0
@@ -795,3 +796,13 @@ class FeatureBuilder:
 
         g.append(1.0 if evis else 0.0)
         return g
+
+    @staticmethod
+    def _game_time_onehot(frame_no):
+        bucket = 0
+        for boundary in FC.GAME_TIME_BUCKETS:
+            if frame_no >= boundary:
+                bucket += 1
+            else:
+                break
+        return [1.0 if idx == bucket else 0.0 for idx in range(FC.GAME_TIME_ONEHOT_DIM)]

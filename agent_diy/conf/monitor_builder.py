@@ -238,6 +238,7 @@ def build_monitor():
     for button in GameConfig.ATTACK_BUTTONS:
         for target in range(9):
             en = "attack_button_%d_target_%d" % (button, target)
+            rate = "attack_button_%d_target_%d_rate" % (button, target)
             builder = (
                 builder.add_panel(
                     name="攻击Button%d-Target%d" % (button, target),
@@ -246,6 +247,14 @@ def build_monitor():
                     unit="",
                 )
                 .add_metric(metrics_name=en, expr="round(avg(%s{}), 1)" % en)
+                .end_panel()
+                .add_panel(
+                    name="攻击Button%d-Target%d占比" % (button, target),
+                    name_en=rate,
+                    type="line",
+                    unit="",
+                )
+                .add_metric(metrics_name=rate, expr="round(avg(%s{}), 0.0001)" % rate)
                 .end_panel()
             )
     builder = builder.end_group()

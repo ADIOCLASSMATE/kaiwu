@@ -244,11 +244,16 @@ class Model(nn.Module):
             [self.lstm_unit_size] + Config.VALUE_HEAD_HIDDEN_DIMS + [1],
             "hero_value_mlp")
 
-        # ---- pointer target 头 ----
+        # ---- button-conditioned pointer target 头 ----
         self._build_target_pointer()
 
     def _build_target_pointer(self):
-        """根据 TARGET_SLOT_DESC 建立 target 槽 → token 的映射 + null key。"""
+        """根据 TARGET_SLOT_DESC 建立 target 槽 → token 的映射 + null key。
+
+        target 语义强依赖 button：普攻需要实体，回城/召唤师技能常常是 None，
+        自保技能常常是 Self。为 12 个 button 各提供一套 pointer query，避免
+        所有 button 共享同一组 target logits 时互相拉扯。
+        """
         desc = FeatureConfig.TARGET_SLOT_DESC
         key_positions = {}
         for i, k in enumerate(self.token_keys):
@@ -273,6 +278,8 @@ class Model(nn.Module):
         self.register_buffer("tgt_null_slots", torch.tensor(tgt_null_slots, dtype=torch.long))
 
         self.target_query_proj = make_fc_layer(self.lstm_unit_size, self.embed_dim)
+        self.target_button_embed = nn.Embedding(self.label_size_list[0], self.embed_dim)
+        nn.init.normal_(self.target_button_embed.weight, std=0.02)
         n_null = len(tgt_null_slots)
         self.null_keys = nn.Parameter(torch.zeros(n_null, self.embed_dim))
         nn.init.normal_(self.null_keys, std=0.02)
@@ -313,16 +320,35 @@ class Model(nn.Module):
         state = self.fuse_mlp(torch.cat([reg_out, global_embed], dim=1))
         return state, entity_out
 
-    def _target_pointer(self, query_in, entity_out):
-        # query_in: (bt, lstm_unit); entity_out: (bt, N, D) -> logits: (bt, num_target_slots)
+    def _target_keys(self, entity_out):
+        # entity_out: (bt, N, D) -> target-slot keys: (bt, num_target_slots, D)
         bt = entity_out.shape[0]
         d = self.embed_dim
-        q = self.target_query_proj(query_in)                       # (bt, D)
-        keys = q.new_zeros(bt, self.num_target_slots, d)
+        keys = entity_out.new_zeros(bt, self.num_target_slots, d)
         keys[:, self.tgt_real_slots, :] = entity_out[:, self.tgt_idx, :]
         keys[:, self.tgt_null_slots, :] = self.null_keys.unsqueeze(0).expand(bt, -1, -1)
-        logits = (keys * q.unsqueeze(1)).sum(dim=-1) / (d ** 0.5)  # (bt, num_target_slots)
-        return logits
+        return keys
+
+    def _target_pointer_by_button(self, query_in, entity_out):
+        # query_in: (bt, lstm_unit); entity_out: (bt, N, D) -> logits: (bt, 12, 9)
+        q_base = self.target_query_proj(query_in)                  # (bt, D)
+        button_ids = torch.arange(
+            self.label_size_list[0],
+            dtype=torch.long,
+            device=query_in.device,
+        )
+        q = q_base.unsqueeze(1) + self.target_button_embed(button_ids).unsqueeze(0)
+        keys = self._target_keys(entity_out)
+        return torch.einsum("bqd,btd->bqt", q, keys) / (self.embed_dim ** 0.5)
+
+    def _gather_target_logits(self, target_logits_by_button, button_labels):
+        button_labels = button_labels.long().clamp(0, self.label_size_list[0] - 1)
+        batch_index = torch.arange(
+            target_logits_by_button.shape[0],
+            dtype=torch.long,
+            device=target_logits_by_button.device,
+        )
+        return target_logits_by_button[batch_index, button_labels, :]
 
     def _shared_actor_logits(self, recurrent_state):
         return [
@@ -379,11 +405,19 @@ class Model(nn.Module):
         flat = lstm_out.reshape(bt, self.lstm_unit_size)
 
         result_list = self._actor_logits(flat, feature_vec)          # label[0..4]
-        result_list.append(self._target_pointer(flat, entity_out))  # label[5] = pointer
+        target_logits_by_button = self._target_pointer_by_button(flat, entity_out)
+        self.target_logits_by_button = target_logits_by_button
+        # label[5] = button-conditioned pointer。训练时按实际 button gather；
+        # 推理时 Agent 采样完 button 后取对应行。
+        result_list.append(target_logits_by_button)
         value_result = self.value_mlp(flat)
         result_list.append(value_result)
 
-        logits = torch.flatten(torch.cat(result_list[:-1], 1), start_dim=1)
+        target_logits_public = target_logits_by_button.mean(dim=1)
+        logits = torch.flatten(
+            torch.cat(result_list[:self.n_categorical_heads] + [target_logits_public], 1),
+            start_dim=1,
+        )
         value = result_list[-1]
 
         if inference:
@@ -453,9 +487,12 @@ class Model(nn.Module):
                 one_hot_actions = nn.functional.one_hot(
                     label_list[task_index].long(), self.label_size_list[task_index])
                 legal_max_mask = (1 - legal_action_flag_list[task_index]) * boundary
+                task_logits = label_result[task_index]
+                if task_index == len(self.label_size_list) - 1 and task_logits.dim() == 3:
+                    task_logits = self._gather_target_logits(task_logits, label_list[0])
                 label_logits_subtract_max = torch.clamp(
-                    label_result[task_index]
-                    - torch.max(label_result[task_index] - legal_max_mask, dim=1, keepdim=True).values,
+                    task_logits
+                    - torch.max(task_logits - legal_max_mask, dim=1, keepdim=True).values,
                     -boundary, 1)
                 label_exp_logits = (legal_action_flag_list[task_index]
                                     * torch.exp(label_logits_subtract_max) + self.min_policy)

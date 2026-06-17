@@ -359,8 +359,13 @@ class GameRewardManager:
             )
         for button in GameConfig.ATTACK_BUTTONS:
             row = self._attack_button_target_counts[button]
+            row_total = sum(row)
             for target, value in enumerate(row):
                 stats[f"attack_button_{button}_target_{target}"] = value
+                stats[f"attack_button_{button}_target_{target}_rate"] = round(
+                    value / row_total if row_total > 0 else 0.0,
+                    4,
+                )
         self._attack_action_cnt = 0
         self._out_of_range_cnt = 0
         self._out_of_range_sum = 0.0

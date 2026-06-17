@@ -326,7 +326,9 @@ class FeatureConfig:
     BULLET_SLOT_TYPES = [0, 1, 2, 3]
     BULLET_SLOT_ONEHOT_DIM = len(BULLET_SLOT_TYPES) + 1
     BULLET_DIM = 1 + 1 + HERO_ID_ONEHOT_DIM + BULLET_SLOT_ONEHOT_DIM + 2 + 1 + 2   # = 16
-    BULLET_VEL_SCALE = 1500.0
+    # Probe velocity distribution: p50≈1074, p95≈3762, max≈4703 units/frame.
+    # 4500 keeps fast hero projectiles mostly unsaturated while still bounding outliers.
+    BULLET_VEL_SCALE = 4500.0
 
     # CAKE_DIM: exists + rel_pos(2) + abs_pos(2) + distance
     CAKE_FIELDS = (
@@ -402,14 +404,17 @@ class FeatureConfig:
     NUM_TARGET_SLOTS = len(TARGET_SLOT_DESC)   # 9
 
     # ---- 全局特征（非 token，拼在 token 之后） ----
-    # frame_no, own_tower_alive, enemy_tower_alive, main_in_enemy_tower_range,
-    # enemy_hero_in_my_atk_range, hp_adv, level_adv, money_adv, enemy_hero_visible
-    GLOBAL_DIM = 9
+    # frame_progress, game_time_bucket(5), own_tower_alive, enemy_tower_alive,
+    # main_in_enemy_tower_range, enemy_hero_in_my_atk_range, hp_adv, level_adv,
+    # money_adv, enemy_hero_visible
+    GAME_TIME_BUCKETS = (3000, 6000, 9000, 12000)
+    GAME_TIME_ONEHOT_DIM = len(GAME_TIME_BUCKETS) + 1
+    GLOBAL_DIM = 1 + GAME_TIME_ONEHOT_DIM + 8
 
     # ---- 总 token 数 / token 特征长度 / 总特征维度 ----
     NUM_TOKENS = sum(count for _, _, count in TOKEN_SEGMENTS)            # 19
     TOKEN_FEATURE_DIM = sum(dim * count for _, dim, count in TOKEN_SEGMENTS)  # 542
-    FEATURE_DIM = TOKEN_FEATURE_DIM + GLOBAL_DIM                          # 551
+    FEATURE_DIM = TOKEN_FEATURE_DIM + GLOBAL_DIM
 
     # ---- 坐标重定标常量 ----
     MAP_SCALE = 46000.0

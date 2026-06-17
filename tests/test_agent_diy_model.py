@@ -97,6 +97,21 @@ class ActorAdapterTests(unittest.TestCase):
         self.assertEqual(tuple(value.shape), (1, 1))
         self.assertEqual(tuple(next_cell.shape), (1, 1, Config.LSTM_UNIT_SIZE))
         self.assertEqual(tuple(next_hidden.shape), (1, 1, Config.LSTM_UNIT_SIZE))
+        self.assertEqual(
+            tuple(self.model.target_logits_by_button.shape),
+            (1, Config.LABEL_SIZE_LIST[0], Config.LABEL_SIZE_LIST[-1]),
+        )
+
+    def test_target_pointer_is_conditioned_by_button(self):
+        self.model.set_eval_mode()
+        feature = self._feature_batch([112])
+        hidden = torch.zeros(1, Config.LSTM_UNIT_SIZE)
+        cell = torch.zeros(1, Config.LSTM_UNIT_SIZE)
+
+        self.model([feature, hidden, cell], inference=True)
+        target_logits = self.model.target_logits_by_button[0]
+
+        self.assertFalse(torch.allclose(target_logits[3], target_logits[8]))
 
     def test_ppo_loss_backward_with_new_feature_layout(self):
         self.model.set_train_mode()

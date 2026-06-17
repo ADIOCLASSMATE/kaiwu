@@ -14,9 +14,10 @@ class FeatureLayoutTests(unittest.TestCase):
         self.assertEqual(FC.CAKE_DIM, 6)
         self.assertEqual(FC.NUM_TOKENS, 19)
         self.assertEqual(FC.TOKEN_FEATURE_DIM, 542)
-        self.assertEqual(FC.FEATURE_DIM, 551)
-        self.assertEqual(Config.SERI_VEC_SPLIT_SHAPE, [(551,), (85,)])
-        self.assertEqual(Config.DATA_SPLIT_SHAPE[0], 636)
+        self.assertEqual(FC.GLOBAL_DIM, 14)
+        self.assertEqual(FC.FEATURE_DIM, 556)
+        self.assertEqual(Config.SERI_VEC_SPLIT_SHAPE, [(556,), (85,)])
+        self.assertEqual(Config.DATA_SPLIT_SHAPE[0], 641)
         self.assertEqual(
             Config.data_shapes[0],
             [Config.DATA_SPLIT_SHAPE[0] * Config.LSTM_TIME_STEPS],
@@ -103,6 +104,18 @@ class FeatureLayoutTests(unittest.TestCase):
                 )
                 self.assertGreaterEqual(min(feature), 0.0)
                 self.assertLessEqual(max(feature), 1.0)
+
+    def test_global_feature_contains_game_time_onehot(self):
+        observation = load_obs("episode_03/frame_01874.json")
+        frame = dict(observation["frame_state"])
+        frame["frame_no"] = 6500
+        feature = FeatureBuilder(observation["camp"]).build(frame)
+        global_part = feature[FC.TOKEN_FEATURE_DIM:]
+        game_time = global_part[1:1 + FC.GAME_TIME_ONEHOT_DIM]
+
+        self.assertEqual(len(global_part), FC.GLOBAL_DIM)
+        self.assertEqual(game_time, [0.0, 0.0, 1.0, 0.0, 0.0])
+        self.assertAlmostEqual(sum(game_time), 1.0)
 
     def test_feature_process_stats_include_new_token_group(self):
         observation = load_obs("episode_03/frame_01874.json")
