@@ -10,6 +10,7 @@ from agent_diy.feature.reward_process import GameRewardManager
 class _FakeMonitorConfigBuilder:
     def __init__(self):
         self.metrics = []
+        self.exprs = {}
 
     def title(self, *_args, **_kwargs):
         return self
@@ -26,12 +27,14 @@ class _FakeMonitorConfigBuilder:
     def end_panel(self):
         return self
 
-    def add_metric(self, metrics_name, *_args, **_kwargs):
+    def add_metric(self, metrics_name, *_args, **kwargs):
         self.metrics.append(metrics_name)
+        if "expr" in kwargs:
+            self.exprs[metrics_name] = kwargs["expr"]
         return self
 
     def build(self):
-        return {"metrics": list(self.metrics)}
+        return {"metrics": list(self.metrics), "exprs": dict(self.exprs)}
 
 
 def _install_fake_monitor_builder():
@@ -48,6 +51,13 @@ def _monitor_metric_names():
     module = importlib.import_module("agent_diy.conf.monitor_builder")
     module = importlib.reload(module)
     return set(module.build_monitor()["metrics"])
+
+
+def _monitor_exprs():
+    _install_fake_monitor_builder()
+    module = importlib.import_module("agent_diy.conf.monitor_builder")
+    module = importlib.reload(module)
+    return module.build_monitor()["exprs"]
 
 
 class AgentDiyMonitorTests(unittest.TestCase):
@@ -125,6 +135,21 @@ class AgentDiyMonitorTests(unittest.TestCase):
         metrics = _monitor_metric_names()
 
         self.assertIn("episode_cnt", metrics)
+
+    def test_rate_panels_round_to_fractional_precision(self):
+        exprs = _monitor_exprs()
+
+        for bucket in (
+            "none",
+            "enemy_hero",
+            "self",
+            "minion",
+            "tower",
+            "monster",
+            "other",
+        ):
+            metric = f"attack_action_target_{bucket}_rate"
+            self.assertIn("0.0001", exprs[metric])
 
 
 if __name__ == "__main__":

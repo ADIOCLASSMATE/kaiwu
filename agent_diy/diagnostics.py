@@ -17,6 +17,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from agent_diy.conf.conf import Config, FeatureConfig
+from agent_diy.feature.action_mask import adjust_target_legal_for_button
 
 
 def _env_bool(name, default=False):
@@ -445,7 +446,8 @@ class AgentDiagnostics:
             fixed = legal[:-raw_target_size]
             target = legal[-raw_target_size:].reshape(Config.LABEL_SIZE_LIST[0], Config.LABEL_SIZE_LIST[-1])
             action0 = int(np.clip(action0, 0, Config.LABEL_SIZE_LIST[0] - 1))
-            return np.concatenate([fixed, target[action0]], axis=0)
+            target_row = adjust_target_legal_for_button(action0, target[action0])
+            return np.concatenate([fixed, target_row], axis=0)
         return np.ones(Config.LABEL_SUM, dtype=np.float64)
 
     def _episode_record(self, episode, frame_no, observation):

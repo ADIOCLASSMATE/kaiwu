@@ -118,6 +118,7 @@ class AdaLNBlock(nn.Module):
 
     def forward(self, x, cond_idx, key_padding_mask):
         # x: (B, S, D); cond_idx: (S,) long; key_padding_mask: (B, S) bool, True=屏蔽
+        key_padding_mask = key_padding_mask.to(dtype=torch.bool).contiguous()
         mod = self.mod_table[cond_idx]                       # (S, 6D)
         g1, b1, k1, g2, b2, k2 = mod.chunk(6, dim=-1)        # each (S, D)
         g1, b1, k1 = g1.unsqueeze(0), b1.unsqueeze(0), k1.unsqueeze(0)

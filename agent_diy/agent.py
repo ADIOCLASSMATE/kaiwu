@@ -22,6 +22,7 @@ from torch.optim.lr_scheduler import LambdaLR
 
 from agent_diy.model.model import Model
 from agent_diy.feature.definition import *
+from agent_diy.feature.action_mask import adjust_target_legal_for_button
 from agent_diy.conf.conf import Config, FeatureConfig
 from agent_diy.feature.reward_process import GameRewardManager
 from agent_diy.algorithm.algorithm import Algorithm
@@ -274,6 +275,7 @@ class Agent(BaseAgent):
         one_hot_actions = np.eye(self.label_size_list[0])[action_list[0]]
         one_hot_actions = np.reshape(one_hot_actions, [self.label_size_list[0], 1])
         target_legal_action = np.sum(target_legal_action_o * one_hot_actions, axis=0)
+        target_legal_action = adjust_target_legal_for_button(action_list[0], target_legal_action)
 
         legal_actions[index] = target_legal_action
         if target_logits_by_button is not None:
@@ -288,6 +290,7 @@ class Agent(BaseAgent):
         one_hot_actions = np.eye(self.label_size_list[0])[d_action_list[0]]
         one_hot_actions = np.reshape(one_hot_actions, [self.label_size_list[0], 1])
         target_legal_action_d = np.sum(target_legal_action_o * one_hot_actions, axis=0)
+        target_legal_action_d = adjust_target_legal_for_button(d_action_list[0], target_legal_action_d)
         if target_logits_by_button is not None:
             target_logits_d = target_logits_by_button[d_action_list[0]]
         else:

@@ -232,7 +232,7 @@ def build_monitor():
             .add_metric(metrics_name=cnt, expr="round(avg(%s{}), 1)" % cnt)
             .end_panel()
             .add_panel(name="攻击目标%s占比" % cn, name_en=rate, type="line", unit="")
-            .add_metric(metrics_name=rate, expr="round(avg(%s{}), 4)" % rate)
+            .add_metric(metrics_name=rate, expr="round(avg(%s{}), 0.0001)" % rate)
             .end_panel()
         )
     for button in GameConfig.ATTACK_BUTTONS:
