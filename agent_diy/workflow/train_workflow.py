@@ -90,9 +90,18 @@ class EpisodeRunner:
     def _load_train_opponent_mix(self, config_path):
         default = {
             "enable": False,
+            "dynamic": False,
             "selfplay": 1.0,
             "common_ai": 0.0,
             "model_pool": 0.0,
+            "common_ai_low_win_rate": 0.05,
+            "common_ai_high_win_rate": 0.25,
+            "low_win_selfplay": 0.7,
+            "low_win_common_ai": 0.3,
+            "mid_win_selfplay": 0.6,
+            "mid_win_common_ai": 0.4,
+            "high_win_selfplay": 0.4,
+            "high_win_common_ai": 0.6,
         }
         try:
             with open(config_path, "rb") as f:
@@ -107,32 +116,110 @@ class EpisodeRunner:
 
         cfg = {
             "enable": bool(mix.get("enable", default["enable"])),
+            "dynamic": bool(mix.get("dynamic", default["dynamic"])),
             "selfplay": max(0.0, float(mix.get("selfplay", default["selfplay"]))),
             "common_ai": max(0.0, float(mix.get("common_ai", default["common_ai"]))),
             "model_pool": max(0.0, float(mix.get("model_pool", default["model_pool"]))),
+            "common_ai_low_win_rate": float(
+                mix.get("common_ai_low_win_rate", default["common_ai_low_win_rate"])
+            ),
+            "common_ai_high_win_rate": float(
+                mix.get("common_ai_high_win_rate", default["common_ai_high_win_rate"])
+            ),
+            "low_win_selfplay": max(0.0, float(
+                mix.get("low_win_selfplay", default["low_win_selfplay"])
+            )),
+            "low_win_common_ai": max(0.0, float(
+                mix.get("low_win_common_ai", default["low_win_common_ai"])
+            )),
+            "mid_win_selfplay": max(0.0, float(
+                mix.get("mid_win_selfplay", default["mid_win_selfplay"])
+            )),
+            "mid_win_common_ai": max(0.0, float(
+                mix.get("mid_win_common_ai", default["mid_win_common_ai"])
+            )),
+            "high_win_selfplay": max(0.0, float(
+                mix.get("high_win_selfplay", default["high_win_selfplay"])
+            )),
+            "high_win_common_ai": max(0.0, float(
+                mix.get("high_win_common_ai", default["high_win_common_ai"])
+            )),
         }
         if cfg["selfplay"] + cfg["common_ai"] + cfg["model_pool"] <= 0:
             cfg["enable"] = False
         self.logger.info(f"train opponent mix config: {cfg}")
         return cfg
 
-    def _select_train_opponent_agent(self, configured_opponent_agent, is_eval, is_train_test):
+    def _common_ai_win_rate(self, training_metrics):
+        if not isinstance(training_metrics, dict):
+            return None
+        candidates = []
+        env = training_metrics.get("env")
+        if isinstance(env, dict):
+            candidates.extend([
+                env.get("common_ai"),
+                env.get("env_common_ai"),
+            ])
+        candidates.extend([
+            training_metrics.get("env_common_ai"),
+            training_metrics.get("common_ai"),
+        ])
+        for item in candidates:
+            if not isinstance(item, dict):
+                continue
+            try:
+                return float(item["win_rate"])
+            except (KeyError, TypeError, ValueError):
+                continue
+        return None
+
+    def _effective_train_opponent_mix(self, training_metrics=None):
+        cfg = dict(self.train_opponent_mix)
+        if not cfg.get("enable", False) or not cfg.get("dynamic", False):
+            return cfg
+
+        win_rate = self._common_ai_win_rate(training_metrics)
+        low_threshold = cfg.get("common_ai_low_win_rate", 0.05)
+        high_threshold = cfg.get("common_ai_high_win_rate", 0.25)
+        if win_rate is None or win_rate < low_threshold:
+            cfg["selfplay"] = cfg.get("low_win_selfplay", 0.7)
+            cfg["common_ai"] = cfg.get("low_win_common_ai", 0.3)
+        elif win_rate < high_threshold:
+            cfg["selfplay"] = cfg.get("mid_win_selfplay", 0.6)
+            cfg["common_ai"] = cfg.get("mid_win_common_ai", 0.4)
+        else:
+            cfg["selfplay"] = cfg.get("high_win_selfplay", 0.4)
+            cfg["common_ai"] = cfg.get("high_win_common_ai", 0.6)
+        self.logger.info(
+            f"dynamic train opponent mix: common_ai_win_rate={win_rate}, "
+            f"selfplay={cfg['selfplay']}, common_ai={cfg['common_ai']}"
+        )
+        return cfg
+
+    def _select_train_opponent_agent(
+        self,
+        configured_opponent_agent,
+        is_eval,
+        is_train_test,
+        training_metrics=None,
+    ):
         if is_eval or is_train_test or not self.train_opponent_mix.get("enable", False):
             return configured_opponent_agent
 
+        mix = self._effective_train_opponent_mix(training_metrics)
         choices = []
         weights = []
-        if self.train_opponent_mix.get("selfplay", 0.0) > 0:
+        if mix.get("selfplay", 0.0) > 0:
             choices.append("selfplay")
-            weights.append(self.train_opponent_mix["selfplay"])
-        if self.train_opponent_mix.get("common_ai", 0.0) > 0:
+            weights.append(mix["selfplay"])
+        if mix.get("common_ai", 0.0) > 0:
             choices.append("common_ai")
-            weights.append(self.train_opponent_mix["common_ai"])
-        if self.train_opponent_mix.get("model_pool", 0.0) > 0:
+            weights.append(mix["common_ai"])
+        if mix.get("model_pool", 0.0) > 0:
             candidate_models = get_valid_model_pool(self.logger)
             if candidate_models:
                 choices.append(str(random.choice(candidate_models)))
-                weights.append(self.train_opponent_mix["model_pool"])
+                weights.append(mix["model_pool"])
             else:
                 self.logger.info("train opponent mix skips model_pool because kaiwu.json model_pool is empty")
 
@@ -142,7 +229,13 @@ class EpisodeRunner:
         self.logger.info(f"train opponent selected: {selected}")
         return selected
 
-    def _prepare_episode_opponent(self, usr_conf, is_eval, is_train_test):
+    def _prepare_episode_opponent(
+        self,
+        usr_conf,
+        is_eval,
+        is_train_test,
+        training_metrics=None,
+    ):
         episode_conf = usr_conf.setdefault("episode", {})
         configured_opponent_agent = (
             episode_conf.get("opponent_agent") or self.env_conf_manager.get_opponent_agent()
@@ -151,6 +244,7 @@ class EpisodeRunner:
             configured_opponent_agent,
             is_eval,
             is_train_test,
+            training_metrics=training_metrics,
         )
         episode_conf["opponent_agent"] = opponent_agent
         return opponent_agent
@@ -261,6 +355,7 @@ class EpisodeRunner:
                 usr_conf,
                 is_eval,
                 is_train_test,
+                training_metrics=training_metrics,
             )
 
             # Call init_config on agents to get summoner skill selections

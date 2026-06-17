@@ -39,9 +39,18 @@ eval_opponent_type = "common_ai"
 # 权重只看相对比例；例如 0.5/0.3/0.2 表示约 50%/30%/20%。
 [episode.train_opponent_mix]
 enable = true
-selfplay = 0.8
-common_ai = 0.2
+dynamic = true
+selfplay = 0.7
+common_ai = 0.3
 model_pool = 0.0
+common_ai_low_win_rate = 0.05
+common_ai_high_win_rate = 0.25
+low_win_selfplay = 0.7
+low_win_common_ai = 0.3
+mid_win_selfplay = 0.6
+mid_win_common_ai = 0.4
+high_win_selfplay = 0.4
+high_win_common_ai = 0.6
 
 # Blue camp lineup configuration
 # 蓝方阵容配置
