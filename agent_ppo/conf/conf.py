@@ -35,6 +35,15 @@ class Config:
     NETWORK_NAME = "network"
     LSTM_TIME_STEPS = 16
     LSTM_UNIT_SIZE = 512
+    EMBED_DIM = 128
+    N_HEADS = 4
+    N_LAYERS = 2
+    FFN_MULT = 4
+    N_REGISTER = 2
+    GLOBAL_PROJ_DIM = 128
+    ADALN_GATE_INIT = 0.1
+    LABEL_HEAD_HIDDEN_DIMS = [256]
+    VALUE_HEAD_HIDDEN_DIMS = [256]
     DATA_SPLIT_SHAPE = [
         10 + 85,
         1,
