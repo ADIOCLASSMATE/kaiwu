@@ -24,7 +24,7 @@ class AgentPpoFeatureSwapTests(unittest.TestCase):
         self.assertEqual(Config.FEATURE_DIM, DiyFeatureConfig.FEATURE_DIM)
         self.assertEqual(Config.SERI_VEC_SPLIT_SHAPE, [(DiyFeatureConfig.FEATURE_DIM,), (85,)])
 
-    def test_old_ppo_model_accepts_diy_feature_dim(self):
+    def test_ppo_model_accepts_diy_feature_dim(self):
         model = Model()
         model.set_eval_mode()
         feature = torch.zeros(1, Config.FEATURE_DIM)
@@ -37,6 +37,61 @@ class AgentPpoFeatureSwapTests(unittest.TestCase):
         self.assertEqual(tuple(value.shape), (1, 1))
         self.assertEqual(tuple(next_cell.shape), (1, 1, Config.LSTM_UNIT_SIZE))
         self.assertEqual(tuple(next_hidden.shape), (1, 1, Config.LSTM_UNIT_SIZE))
+
+    def test_ppo_model_uses_diy_token_encoder(self):
+        model = Model()
+        feature = torch.zeros(2, Config.FEATURE_DIM)
+
+        structured_state, entity_out = model._encode(feature)
+
+        self.assertEqual(model.num_tokens, DiyFeatureConfig.NUM_TOKENS)
+        self.assertEqual(model.token_feature_dim, DiyFeatureConfig.TOKEN_FEATURE_DIM)
+        self.assertEqual(tuple(structured_state.shape), (2, Config.PPO_ENCODER_OUTPUT_DIM))
+        self.assertEqual(tuple(entity_out.shape), (2, DiyFeatureConfig.NUM_TOKENS, Config.EMBED_DIM))
+        self.assertGreater(model.token_residual_gate.item(), 0.0)
+        self.assertGreater(model.target_pointer_gate.item(), 0.0)
+        self.assertGreater(model.lstm_residual_gate.item(), 0.0)
+
+    def test_ppo_model_uses_button_conditioned_target_pointer(self):
+        model = Model()
+        model.set_train_mode()
+        feature = torch.zeros(Config.LSTM_TIME_STEPS, Config.FEATURE_DIM)
+        hidden = torch.zeros(1, Config.LSTM_UNIT_SIZE)
+        cell = torch.zeros(1, Config.LSTM_UNIT_SIZE)
+
+        result_list = model([feature, hidden, cell], inference=False)
+
+        target_logits_by_button = result_list[-2]
+        self.assertEqual(
+            tuple(target_logits_by_button.shape),
+            (Config.LSTM_TIME_STEPS, Config.LABEL_SIZE_LIST[0], Config.LABEL_SIZE_LIST[-1]),
+        )
+        self.assertEqual(tuple(model.lstm_cell_output.shape), (1, 1, Config.LSTM_UNIT_SIZE))
+        self.assertEqual(tuple(model.lstm_hidden_output.shape), (1, 1, Config.LSTM_UNIT_SIZE))
+
+    def test_agent_samples_target_from_selected_button_logits(self):
+        try:
+            from agent_ppo.agent import Agent
+        except ModuleNotFoundError as exc:
+            self.skipTest("agent framework dependency is unavailable: {}".format(exc))
+
+        agent = Agent.__new__(Agent)
+        agent.label_size_list = Config.LABEL_SIZE_LIST
+        agent.legal_action_size = Config.LEGAL_ACTION_SIZE_LIST
+        logits = torch.zeros(Config.LABEL_SUM).numpy()
+        logits[4] = 10.0
+        legal_action = torch.ones(sum(Config.LEGAL_ACTION_SIZE_LIST)).numpy()
+        target_logits_by_button = torch.zeros(Config.LABEL_SIZE_LIST[0], Config.LABEL_SIZE_LIST[-1]).numpy()
+        target_logits_by_button[4, 7] = 10.0
+
+        _, _, _, d_action = agent._sample_masked_action(
+            logits,
+            legal_action,
+            target_logits_by_button=target_logits_by_button,
+        )
+
+        self.assertEqual(d_action[0], 4)
+        self.assertEqual(d_action[-1], 7)
 
 
 if __name__ == "__main__":

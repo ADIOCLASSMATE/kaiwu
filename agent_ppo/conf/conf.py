@@ -89,6 +89,20 @@ class Config:
 
     TARGET_EMBED_DIM = 32
 
+    # DIY token/entity encoder parameters. PPO keeps the raw feature MLP as the
+    # primary path and adds the structured encoder through small residual gates.
+    PPO_ENCODER_OUTPUT_DIM = 256
+    EMBED_DIM = 128
+    N_HEADS = 4
+    N_LAYERS = 2
+    FFN_MULT = 2
+    N_REGISTER = 2
+    GLOBAL_PROJ_DIM = 64
+    ADALN_GATE_INIT = 0.1
+    TOKEN_RESIDUAL_INIT = 0.05
+    TARGET_POINTER_INIT = 0.05
+    LSTM_RESIDUAL_INIT = 0.05
+
     data_shapes = []
     for _i in range(len(DATA_SPLIT_SHAPE) - 2):
         data_shapes.append([DATA_SPLIT_SHAPE[_i] * LSTM_TIME_STEPS])

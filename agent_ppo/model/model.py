@@ -10,12 +10,13 @@ Author: Tencent AI Arena Authors
 
 import torch
 import torch.nn as nn
-from torch.nn import ModuleDict
+from torch.nn import ModuleDict, ModuleList
 
 import numpy as np
 from typing import List
 
 from agent_ppo.conf.conf import DimConfig, Config
+from agent_diy.conf.conf import FeatureConfig
 
 
 class Model(nn.Module):
@@ -50,8 +51,85 @@ class Model(nn.Module):
         # 网络维度
         self.hero_data_len = sum(Config.data_shapes[0])
         self.feature_dim = int(DimConfig.DIM_OF_FEATURE[0])
-        fc_concat_dim_list = [self.feature_dim, 256, 256]
-        self.concat_mlp = MLP(fc_concat_dim_list, "concat_mlp", non_linearity_last=True)
+        self.encoder_output_dim = Config.PPO_ENCODER_OUTPUT_DIM
+        self.n_categorical_heads = len(self.label_size_list) - 1
+
+        self.concat_mlp = MLP(
+            [self.feature_dim, self.encoder_output_dim, self.encoder_output_dim],
+            "concat_mlp",
+            non_linearity=nn.GELU,
+            non_linearity_last=True,
+        )
+
+        self.token_segments = FeatureConfig.TOKEN_SEGMENTS
+        self.num_tokens = FeatureConfig.NUM_TOKENS
+        self.token_feature_dim = FeatureConfig.TOKEN_FEATURE_DIM
+        self.global_dim = FeatureConfig.GLOBAL_DIM
+        self.embed_dim = Config.EMBED_DIM
+        self.n_register = Config.N_REGISTER
+
+        self.token_layout = []
+        self.token_keys = []
+        offset = 0
+        for type_key, dim, count in self.token_segments:
+            for _ in range(count):
+                self.token_layout.append((type_key, offset, dim))
+                self.token_keys.append(type_key)
+                offset += dim
+        assert offset == self.token_feature_dim
+
+        self.proj_key_of = dict(FeatureConfig.TYPE_OF)
+        proj_in = {}
+        for type_key, dim, count in self.token_segments:
+            proj_in[self.proj_key_of[type_key]] = dim
+        self.entity_proj = ModuleDict(
+            {
+                proj_key: make_fc_layer(in_dim, self.embed_dim)
+                for proj_key, in_dim in proj_in.items()
+            }
+        )
+        self.input_norm = ModuleDict(
+            {
+                proj_key: nn.Identity()
+                for proj_key in proj_in
+            }
+        )
+
+        cond_keys = list(FeatureConfig.COND_KEYS)
+        self.cond_key_to_idx = {key: index for index, key in enumerate(cond_keys)}
+        self.register_cond_idx = len(cond_keys)
+        cond_idx = [self.register_cond_idx] * self.n_register + [
+            self.cond_key_to_idx[key] for key in self.token_keys
+        ]
+        self.register_buffer("cond_idx", torch.tensor(cond_idx, dtype=torch.long))
+
+        self.register_tokens = nn.Parameter(torch.zeros(self.n_register, self.embed_dim))
+        nn.init.normal_(self.register_tokens, std=0.02)
+
+        ffn_dim = self.embed_dim * Config.FFN_MULT
+        self.blocks = ModuleList(
+            [
+                AdaLNBlock(self.embed_dim, Config.N_HEADS, ffn_dim, len(cond_keys) + 1)
+                for _ in range(Config.N_LAYERS)
+            ]
+        )
+
+        self.global_proj = MLP(
+            [self.global_dim, Config.GLOBAL_PROJ_DIM, Config.GLOBAL_PROJ_DIM],
+            "global_proj",
+            non_linearity=nn.GELU,
+            non_linearity_last=True,
+        )
+        fused_dim = self.embed_dim * self.n_register + Config.GLOBAL_PROJ_DIM
+        self.feature_encoder = MLP(
+            [fused_dim, self.encoder_output_dim],
+            "feature_encoder",
+            non_linearity=nn.GELU,
+            non_linearity_last=True,
+        )
+        self.token_residual_gate = nn.Parameter(
+            torch.tensor(float(Config.TOKEN_RESIDUAL_INIT))
+        )
 
         self.lstm = torch.nn.LSTM(
             input_size=self.lstm_unit_size,
@@ -62,39 +140,185 @@ class Model(nn.Module):
             dropout=0,
             bidirectional=False,
         )
+        self.lstm_input_proj = make_fc_layer(self.encoder_output_dim, self.lstm_unit_size)
+        self.lstm_output_proj = make_fc_layer(self.lstm_unit_size, self.encoder_output_dim)
+        self.lstm_residual_gate = nn.Parameter(
+            torch.tensor(float(Config.LSTM_RESIDUAL_INIT))
+        )
 
         self.label_mlp = ModuleDict(
             {
                 "hero_label{0}_mlp".format(label_index): MLP(
-                    [256, 256, self.label_size_list[label_index]],
+                    [self.encoder_output_dim, 256, self.label_size_list[label_index]],
                     "hero_label{0}_mlp".format(label_index),
                 )
-                for label_index in range(len(self.label_size_list))
+                for label_index in range(self.n_categorical_heads)
             }
         )
-        self.lstm_tar_embed_mlp = make_fc_layer(self.lstm_unit_size, self.target_embed_dim)
+        self.target_base_mlp = MLP(
+            [self.encoder_output_dim, 256, self.label_size_list[-1]],
+            "hero_label{0}_base_mlp".format(self.n_categorical_heads),
+        )
+        self.target_pointer_gate = nn.Parameter(
+            torch.tensor(float(Config.TARGET_POINTER_INIT))
+        )
+        self.value_mlp = MLP([self.encoder_output_dim, 256, 1], "hero_value_mlp")
 
-        self.value_mlp = MLP([256, 256, 1], "hero_value_mlp")
+        self._build_target_pointer()
 
-        self.target_embed_mlp = make_fc_layer(self.target_embed_dim, self.target_embed_dim, use_bias=False)
+    def _build_target_pointer(self):
+        desc = FeatureConfig.TARGET_SLOT_DESC
+        key_positions = {}
+        for index, key in enumerate(self.token_keys):
+            key_positions.setdefault(key, []).append(index)
+        counters = {key: 0 for key in key_positions}
+
+        target_indices = []
+        real_slots = []
+        null_slots = []
+        for slot, (_name, key) in enumerate(desc):
+            if key is None:
+                null_slots.append(slot)
+                continue
+
+            token_index = key_positions[key][counters[key]]
+            counters[key] += 1
+            target_indices.append(token_index)
+            real_slots.append(slot)
+
+        self.num_target_slots = len(desc)
+        self.register_buffer("tgt_idx", torch.tensor(target_indices, dtype=torch.long))
+        self.register_buffer("tgt_real_slots", torch.tensor(real_slots, dtype=torch.long))
+        self.register_buffer("tgt_null_slots", torch.tensor(null_slots, dtype=torch.long))
+
+        self.target_query_proj = make_fc_layer(self.encoder_output_dim, self.embed_dim)
+        self.target_button_embed = nn.Embedding(self.label_size_list[0], self.embed_dim)
+        nn.init.normal_(self.target_button_embed.weight, std=0.02)
+        self.null_keys = nn.Parameter(torch.zeros(len(null_slots), self.embed_dim))
+        nn.init.normal_(self.null_keys, std=0.02)
+
+    def _encode(self, feature_vec):
+        batch_size = feature_vec.shape[0]
+        token_part = feature_vec[:, :self.token_feature_dim]
+        global_part = feature_vec[:, self.token_feature_dim:]
+
+        embeds = []
+        exists_list = []
+        for type_key, start, dim in self.token_layout:
+            segment = token_part[:, start:start + dim]
+            exists = (segment[:, 0:1] > 0.5).float()
+            segment = self.input_norm[self.proj_key_of[type_key]](segment)
+            projected = self.entity_proj[self.proj_key_of[type_key]](segment)
+            embeds.append(projected.unsqueeze(1))
+            exists_list.append(exists)
+
+        entity_tokens = torch.cat(embeds, dim=1)
+        exists_mat = torch.cat(exists_list, dim=1)
+        register_tokens = self.register_tokens.unsqueeze(0).expand(batch_size, -1, -1)
+        encoded = torch.cat([register_tokens, entity_tokens], dim=1)
+
+        register_mask = torch.zeros(
+            batch_size,
+            self.n_register,
+            dtype=torch.bool,
+            device=encoded.device,
+        )
+        entity_mask = exists_mat < 0.5
+        key_padding_mask = torch.cat([register_mask, entity_mask], dim=1)
+
+        for block in self.blocks:
+            encoded = block(encoded, self.cond_idx, key_padding_mask)
+
+        register_out = encoded[:, :self.n_register, :].reshape(batch_size, -1)
+        entity_out = encoded[:, self.n_register:, :]
+        global_embed = self.global_proj(global_part)
+        structured_state = self.feature_encoder(torch.cat([register_out, global_embed], dim=1))
+        return structured_state, entity_out
+
+    def _target_keys(self, entity_out):
+        batch_size = entity_out.shape[0]
+        keys = entity_out.new_zeros(batch_size, self.num_target_slots, self.embed_dim)
+        keys[:, self.tgt_real_slots, :] = entity_out[:, self.tgt_idx, :]
+        keys[:, self.tgt_null_slots, :] = self.null_keys.unsqueeze(0).expand(batch_size, -1, -1)
+        return keys
+
+    def _target_pointer_by_button(self, state, entity_out):
+        query_base = self.target_query_proj(state)
+        button_ids = torch.arange(
+            self.label_size_list[0],
+            dtype=torch.long,
+            device=state.device,
+        )
+        query = query_base.unsqueeze(1) + self.target_button_embed(button_ids).unsqueeze(0)
+        keys = self._target_keys(entity_out)
+        return torch.einsum("bqd,btd->bqt", query, keys) / (self.embed_dim ** 0.5)
+
+    def _gather_target_logits(self, target_logits_by_button, button_labels):
+        button_labels = button_labels.long().clamp(0, self.label_size_list[0] - 1)
+        batch_index = torch.arange(
+            target_logits_by_button.shape[0],
+            dtype=torch.long,
+            device=target_logits_by_button.device,
+        )
+        return target_logits_by_button[batch_index, button_labels, :]
+
+    def _apply_lstm_residual(self, state, lstm_hidden_init, lstm_cell_init, time_steps):
+        batch_time = state.shape[0]
+        if batch_time % time_steps != 0:
+            raise ValueError(
+                "feature batch size {} is not divisible by LSTM time steps {}".format(
+                    batch_time,
+                    time_steps,
+                )
+            )
+        batch_size = batch_time // time_steps
+
+        lstm_input = self.lstm_input_proj(state).reshape(
+            batch_size,
+            time_steps,
+            self.lstm_unit_size,
+        )
+        h0 = lstm_hidden_init.reshape(batch_size, self.lstm_unit_size).unsqueeze(0).contiguous()
+        c0 = lstm_cell_init.reshape(batch_size, self.lstm_unit_size).unsqueeze(0).contiguous()
+        lstm_out, (hn, cn) = self.lstm(lstm_input, (h0, c0))
+        self.lstm_hidden_output = hn
+        self.lstm_cell_output = cn
+
+        temporal_state = self.lstm_output_proj(lstm_out.reshape(batch_time, self.lstm_unit_size))
+        return state + self.lstm_residual_gate * temporal_state
 
     def forward(self, data_list, inference=False):
         feature_vec, lstm_hidden_init, lstm_cell_init = data_list
 
-        self.lstm_cell_output = lstm_cell_init.unsqueeze(0)
-        self.lstm_hidden_output = lstm_hidden_init.unsqueeze(0)
-
         result_list = []
 
-        # public concat
-        # 公共连接层
-        fc_public_result = self.concat_mlp(feature_vec)
+        # Raw MLP keeps direct access to all 561 feature fields; the token
+        # encoder adds structured entity relations through a small residual.
+        raw_state = self.concat_mlp(feature_vec)
+        structured_state, entity_out = self._encode(feature_vec)
+        fc_public_result = raw_state + self.token_residual_gate * structured_state
+        time_steps = 1 if inference else self.lstm_time_steps
+        fc_public_result = self._apply_lstm_residual(
+            fc_public_result,
+            lstm_hidden_init,
+            lstm_cell_init,
+            time_steps,
+        )
 
         # output label
         # 输出标签
-        for label_index, label_dim in enumerate(self.label_size_list[:]):
+        for label_index in range(self.n_categorical_heads):
             label_mlp_out = self.label_mlp["hero_label{0}_mlp".format(label_index)](fc_public_result)
             result_list.append(label_mlp_out)
+
+        target_base_logits = self.target_base_mlp(fc_public_result)
+        target_pointer_logits = self._target_pointer_by_button(fc_public_result, entity_out)
+        target_logits_by_button = (
+            target_base_logits.unsqueeze(1)
+            + self.target_pointer_gate * target_pointer_logits
+        )
+        self.target_logits_by_button = target_logits_by_button
+        result_list.append(target_logits_by_button)
 
         # output value
         # 输出价值
@@ -103,7 +327,11 @@ class Model(nn.Module):
 
         # prepare for infer graph
         # 准备推理图
-        logits = torch.flatten(torch.cat(result_list[:-1], 1), start_dim=1)
+        target_logits_public = target_logits_by_button.mean(dim=1)
+        logits = torch.flatten(
+            torch.cat(result_list[:self.n_categorical_heads] + [target_logits_public], 1),
+            start_dim=1,
+        )
         value = result_list[-1]
 
         if inference:
@@ -187,13 +415,16 @@ class Model(nn.Module):
                 final_log_p = torch.tensor(0.0)
                 boundary = torch.pow(torch.tensor(10.0), torch.tensor(20.0))
                 one_hot_actions = nn.functional.one_hot(label_list[task_index].long(), self.label_size_list[task_index])
+                task_logits = label_result[task_index]
+                if task_index == self.n_categorical_heads and task_logits.dim() == 3:
+                    task_logits = self._gather_target_logits(task_logits, label_list[0])
 
                 legal_action_flag_list_max_mask = (1 - legal_action_flag_list[task_index]) * boundary
 
                 label_logits_subtract_max = torch.clamp(
-                    label_result[task_index]
+                    task_logits
                     - torch.max(
-                        label_result[task_index] - legal_action_flag_list_max_mask,
+                        task_logits - legal_action_flag_list_max_mask,
                         dim=1,
                         keepdim=True,
                     ).values,
@@ -274,7 +505,7 @@ class Model(nn.Module):
 def make_fc_layer(in_features: int, out_features: int, use_bias=True):
     fc_layer = nn.Linear(in_features, out_features, bias=use_bias)
 
-    nn.init.orthogonal(fc_layer.weight)
+    nn.init.orthogonal_(fc_layer.weight)
     if use_bias:
         nn.init.zeros_(fc_layer.bias)
 
@@ -299,3 +530,43 @@ class MLP(nn.Module):
 
     def forward(self, data):
         return self.fc_layers(data)
+
+
+class AdaLNBlock(nn.Module):
+    def __init__(self, d_model: int, nhead: int, ffn_dim: int, n_cond: int):
+        super().__init__()
+        self.norm1 = nn.LayerNorm(d_model, elementwise_affine=False)
+        self.attn = nn.MultiheadAttention(d_model, nhead, batch_first=True)
+        self.norm2 = nn.LayerNorm(d_model, elementwise_affine=False)
+        self.mlp = nn.Sequential(
+            make_fc_layer(d_model, ffn_dim),
+            nn.GELU(),
+            make_fc_layer(ffn_dim, d_model),
+        )
+
+        mod = torch.zeros(n_cond, 6 * d_model)
+        gate_init = float(Config.ADALN_GATE_INIT)
+        if gate_init != 0.0:
+            mod[:, 2 * d_model:3 * d_model] = gate_init
+            mod[:, 5 * d_model:6 * d_model] = gate_init
+        self.mod_table = nn.Parameter(mod)
+
+    def forward(self, x, cond_idx, key_padding_mask):
+        key_padding_mask = key_padding_mask.to(dtype=torch.bool).contiguous()
+        mod = self.mod_table[cond_idx]
+        g1, b1, k1, g2, b2, k2 = mod.chunk(6, dim=-1)
+        g1, b1, k1 = g1.unsqueeze(0), b1.unsqueeze(0), k1.unsqueeze(0)
+        g2, b2, k2 = g2.unsqueeze(0), b2.unsqueeze(0), k2.unsqueeze(0)
+
+        hidden = self.norm1(x) * (1.0 + g1) + b1
+        attn_out, _ = self.attn(
+            hidden,
+            hidden,
+            hidden,
+            key_padding_mask=key_padding_mask,
+            need_weights=False,
+        )
+        x = x + k1 * attn_out
+
+        hidden = self.norm2(x) * (1.0 + g2) + b2
+        return x + k2 * self.mlp(hidden)

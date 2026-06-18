@@ -140,10 +140,13 @@ class Agent(BaseAgent):
         self.model.set_eval_mode()
         with torch.no_grad():
             output_list = self.model(format_inputs, inference=True)
+            target_logits_by_button = getattr(self.model, "target_logits_by_button", None)
 
         np_output = []
         for output in output_list:
-            np_output.append(output.numpy())
+            np_output.append(output.detach().cpu().numpy())
+        if target_logits_by_button is not None:
+            target_logits_by_button = target_logits_by_button.detach().cpu().numpy()
 
         logits, value, _lstm_cell, _lstm_hidden = np_output[:4]
 
@@ -152,7 +155,14 @@ class Agent(BaseAgent):
 
         list_act_data = list()
         for i in range(len(legal_action)):
-            prob, d_prob, action, d_action = self._sample_masked_action(logits[i], legal_action[i])
+            target_logits = None
+            if target_logits_by_button is not None:
+                target_logits = target_logits_by_button[i]
+            prob, d_prob, action, d_action = self._sample_masked_action(
+                logits[i],
+                legal_action[i],
+                target_logits_by_button=target_logits,
+            )
             list_act_data.append(
                 ActData(
                     action=action,
@@ -245,7 +255,7 @@ class Agent(BaseAgent):
         self.lstm_cell = act_data.lstm_cell
         self.lstm_hidden = act_data.lstm_hidden
 
-    def _sample_masked_action(self, logits, legal_action):
+    def _sample_masked_action(self, logits, legal_action, target_logits_by_button=None):
         """
         Sample actions from predicted logits and legal actions
         return: probability, stochastic and deterministic actions with additional list
@@ -286,7 +296,10 @@ class Agent(BaseAgent):
         target_legal_action = np.sum(target_legal_action_o * one_hot_actions, axis=0)
 
         legal_actions[index] = target_legal_action
-        probs = self._legal_soft_max(logits_split[-1], target_legal_action)
+        sample_target_logits = logits_split[-1]
+        if target_logits_by_button is not None:
+            sample_target_logits = target_logits_by_button[action_list[0]]
+        probs = self._legal_soft_max(sample_target_logits, target_legal_action)
         prob_list += list(probs)
         sample_action = self._legal_sample(probs, use_max=False)
         action_list.append(sample_action)
@@ -295,7 +308,10 @@ class Agent(BaseAgent):
         one_hot_actions = np.reshape(one_hot_actions, [self.label_size_list[0], 1])
         target_legal_action_d = np.sum(target_legal_action_o * one_hot_actions, axis=0)
 
-        probs = self._legal_soft_max(logits_split[-1], target_legal_action_d)
+        deterministic_target_logits = logits_split[-1]
+        if target_logits_by_button is not None:
+            deterministic_target_logits = target_logits_by_button[d_action_list[0]]
+        probs = self._legal_soft_max(deterministic_target_logits, target_legal_action_d)
         d_prob_list += list(probs)
 
         d_action = self._legal_sample(probs, use_max=True)
