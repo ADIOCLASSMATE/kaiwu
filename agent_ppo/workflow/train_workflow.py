@@ -196,6 +196,10 @@ class EpisodeRunner:
                         # Only sample when do_sample=True and is_eval=False
                         # 评估对局数据不采样，不是训练中最新模型产生的数据不采样
                         if not is_eval and do_sample:
+                            agent.reward_manager.set_distance_penalty(
+                                actions[index],
+                                observation[str(index)]["frame_state"],
+                            )
                             frame = build_frame(agent, observation[str(index)])
                             frame_collector.save_frame(frame, agent_id=index)
 
@@ -225,6 +229,14 @@ class EpisodeRunner:
                 # 正常结束或超时退出，运行train_test时会提前退出
                 is_gameover = terminated or truncated or (is_train_test and frame_no >= 1000)
                 if is_gameover:
+                    for i, (do_sample, agent) in enumerate(zip(self.do_samples, self.agents)):
+                        if do_sample:
+                            terminal_bonus = agent.reward_manager.apply_terminal_outcome(
+                                observation[str(i)]["reward"],
+                                observation[str(i)]["frame_state"],
+                                observation[str(i)].get("win"),
+                            )
+                            reward_sum_list[i] += terminal_bonus
                     self.logger.info(
                         f"episode_{self.episode_cnt} terminated in fno_{frame_no}, truncated:{truncated}, eval:{is_eval}, reward_sum:{reward_sum_list[monitor_side]}"
                     )

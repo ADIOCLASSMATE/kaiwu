@@ -16,7 +16,7 @@ import numpy as np
 from typing import List
 
 from agent_ppo.conf.conf import DimConfig, Config
-from agent_diy.conf.conf import FeatureConfig
+from agent_ppo.conf.conf import FeatureConfig
 
 
 class Model(nn.Module):

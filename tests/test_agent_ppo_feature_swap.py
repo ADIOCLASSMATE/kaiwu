@@ -1,30 +1,31 @@
 import unittest
+from pathlib import Path
 
 try:
     import torch
 
-    from agent_diy.conf.conf import FeatureConfig as DiyFeatureConfig
-    from agent_diy.feature.feature_process import FeatureProcess as DiyFeatureProcess
-    from agent_ppo.conf.conf import Config
+    from agent_ppo.conf.conf import Config, FeatureConfig, GameConfig
     from agent_ppo.feature.feature_process import FeatureProcess
+    from agent_ppo.feature.reward_process import GameRewardManager
     from agent_ppo.model.model import Model
 except ModuleNotFoundError:
     torch = None
-    DiyFeatureConfig = None
-    DiyFeatureProcess = None
     Config = None
+    FeatureConfig = None
+    GameConfig = None
     FeatureProcess = None
+    GameRewardManager = None
     Model = None
 
 
 @unittest.skipIf(torch is None, "torch is not installed")
 class AgentPpoFeatureSwapTests(unittest.TestCase):
-    def test_ppo_uses_diy_feature_process(self):
-        self.assertIs(FeatureProcess, DiyFeatureProcess)
-        self.assertEqual(Config.FEATURE_DIM, DiyFeatureConfig.FEATURE_DIM)
-        self.assertEqual(Config.SERI_VEC_SPLIT_SHAPE, [(DiyFeatureConfig.FEATURE_DIM,), (85,)])
+    def test_ppo_owns_feature_process(self):
+        self.assertEqual(FeatureProcess.__module__, "agent_ppo.feature.feature_process")
+        self.assertEqual(Config.FEATURE_DIM, FeatureConfig.FEATURE_DIM)
+        self.assertEqual(Config.SERI_VEC_SPLIT_SHAPE, [(FeatureConfig.FEATURE_DIM,), (85,)])
 
-    def test_ppo_model_accepts_diy_feature_dim(self):
+    def test_ppo_model_accepts_migrated_feature_dim(self):
         model = Model()
         model.set_eval_mode()
         feature = torch.zeros(1, Config.FEATURE_DIM)
@@ -44,10 +45,10 @@ class AgentPpoFeatureSwapTests(unittest.TestCase):
 
         structured_state, entity_out = model._encode(feature)
 
-        self.assertEqual(model.num_tokens, DiyFeatureConfig.NUM_TOKENS)
-        self.assertEqual(model.token_feature_dim, DiyFeatureConfig.TOKEN_FEATURE_DIM)
+        self.assertEqual(model.num_tokens, FeatureConfig.NUM_TOKENS)
+        self.assertEqual(model.token_feature_dim, FeatureConfig.TOKEN_FEATURE_DIM)
         self.assertEqual(tuple(structured_state.shape), (2, Config.PPO_ENCODER_OUTPUT_DIM))
-        self.assertEqual(tuple(entity_out.shape), (2, DiyFeatureConfig.NUM_TOKENS, Config.EMBED_DIM))
+        self.assertEqual(tuple(entity_out.shape), (2, FeatureConfig.NUM_TOKENS, Config.EMBED_DIM))
         self.assertGreater(model.token_residual_gate.item(), 0.0)
         self.assertGreater(model.target_pointer_gate.item(), 0.0)
         self.assertGreater(model.lstm_residual_gate.item(), 0.0)
@@ -92,6 +93,32 @@ class AgentPpoFeatureSwapTests(unittest.TestCase):
 
         self.assertEqual(d_action[0], 4)
         self.assertEqual(d_action[-1], 7)
+
+    def test_ppo_reward_has_terminal_bonus(self):
+        reward = {"reward_sum": 1.25}
+        manager = GameRewardManager(main_hero_runtime_id=101)
+
+        bonus = manager.apply_terminal_outcome(reward, {"hero_states": []}, win=1)
+
+        self.assertEqual(reward["terminal"], 1.0)
+        self.assertEqual(bonus, GameConfig.TERMINAL_WIN_REWARD * GameConfig.TERMINAL_WIN_MIN_QUALITY)
+        self.assertEqual(reward["reward_sum"], 1.25 + bonus)
+        self.assertEqual(manager.apply_terminal_outcome(reward, {"hero_states": []}, win=1), 0.0)
+
+    def test_agent_ppo_does_not_import_agent_diy(self):
+        repo = Path(__file__).resolve().parents[1]
+        ppo_files = [
+            path
+            for path in (repo / "agent_ppo").rglob("*.py")
+            if "__pycache__" not in path.parts
+        ]
+        offenders = [
+            str(path.relative_to(repo))
+            for path in ppo_files
+            if "agent_diy" in path.read_text(encoding="utf-8")
+        ]
+
+        self.assertEqual(offenders, [])
 
 
 if __name__ == "__main__":
