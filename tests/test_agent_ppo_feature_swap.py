@@ -24,6 +24,73 @@ except ModuleNotFoundError:
     Model = None
 
 
+MAIN_ID = 101
+ENEMY_ID = 202
+
+
+def make_hero(
+    runtime_id,
+    camp,
+    *,
+    hp=1000,
+    max_hp=1000,
+    attack_range=5000,
+    x=0,
+    z=0,
+):
+    return {
+        "runtime_id": runtime_id,
+        "camp": camp,
+        "hp": hp,
+        "max_hp": max_hp,
+        "attack_range": attack_range,
+        "location": {"x": x, "z": z},
+    }
+
+
+def make_tower(camp, *, hp=1000, x=0, z=0):
+    return {
+        "runtime_id": 1000 + camp,
+        "actor_type": 2,
+        "sub_type": 21,
+        "camp": camp,
+        "hp": hp,
+        "max_hp": 1000,
+        "attack_range": 5000,
+        "attack_target": 0,
+        "location": {"x": x, "z": z},
+    }
+
+
+def make_minion(runtime_id, camp, *, hp=1000, x=0, z=0):
+    return {
+        "runtime_id": runtime_id,
+        "actor_type": 1,
+        "sub_type": 11,
+        "camp": camp,
+        "hp": hp,
+        "max_hp": 1000,
+        "kill_income": 40,
+        "location": {"x": x, "z": z},
+    }
+
+
+def make_frame(*, main=None, enemy=None, npcs=None):
+    return {
+        "frame_no": 0,
+        "hero_states": [
+            main or make_hero(MAIN_ID, 1, x=-10000),
+            enemy or make_hero(ENEMY_ID, 2, x=10000),
+        ],
+        "npc_states": npcs or [
+            make_tower(1, x=-15000),
+            make_tower(2, x=15000),
+        ],
+        "cakes": [],
+        "frame_action": {"dead_action": []},
+    }
+
+
 @unittest.skipIf(torch is None, "torch is not installed")
 class AgentPpoFeatureSwapTests(unittest.TestCase):
     def test_ppo_owns_feature_process(self):
@@ -147,6 +214,50 @@ class AgentPpoFeatureSwapTests(unittest.TestCase):
         self.assertEqual(stats["button3_no_entity_target_legal_cnt"], 1)
         self.assertEqual(stats["button3_masked_no_entity_target_cnt"], 1)
 
+    def test_ppo_action_quality_monitor_stats_are_reported(self):
+        manager = GameRewardManager(MAIN_ID)
+        frame = make_frame(
+            main=make_hero(MAIN_ID, 1, attack_range=1000, x=0),
+            enemy=make_hero(ENEMY_ID, 2, x=900),
+            npcs=[
+                make_tower(1, x=-15000),
+                make_tower(2, x=15000),
+                make_minion(401, 2, hp=150, x=800),
+            ],
+        )
+
+        manager.set_distance_penalty([1, 7, 8, 9, 10, 0], frame)
+        manager.set_distance_penalty([3, 1, 2, 3, 4, 3], frame)
+        manager.result(frame)
+        stats = manager.consume_monitor_stats()
+
+        self.assertEqual(stats["noop_cnt"], 1)
+        self.assertEqual(stats["noop_enemy_in_range_cnt"], 1)
+        self.assertEqual(stats["noop_last_hit_window_cnt"], 1)
+        self.assertEqual(stats["action_button_1_rate"], 0.5)
+        self.assertEqual(stats["action_head_1_7"], 1)
+        self.assertEqual(stats["action_head_4_10"], 1)
+        self.assertEqual(stats["resolved_attack_cnt"], 1)
+        self.assertEqual(stats["attack_in_range_rate"], 1.0)
+        self.assertEqual(stats["out_of_range_button_3_cnt"], 0)
+
+    def test_ppo_out_of_range_monitor_breaks_down_button_and_target(self):
+        manager = GameRewardManager(MAIN_ID)
+        frame = make_frame(
+            main=make_hero(MAIN_ID, 1, attack_range=1000, x=0),
+            enemy=make_hero(ENEMY_ID, 2, x=5000),
+        )
+
+        manager.set_distance_penalty([3, 0, 0, 0, 0, 1], frame)
+        manager.result(frame)
+        stats = manager.consume_monitor_stats()
+
+        self.assertEqual(stats["out_of_range_button_3_cnt"], 1)
+        self.assertEqual(stats["out_of_range_button_3_rate"], 1.0)
+        self.assertEqual(stats["out_of_range_target_enemy_hero_cnt"], 1)
+        self.assertEqual(stats["out_of_range_target_enemy_hero_rate"], 1.0)
+        self.assertEqual(stats["attack_far_out_rate"], 1.0)
+
     def test_ppo_monitor_builder_declares_observability_panels(self):
         repo = Path(__file__).resolve().parents[1]
         monitor_source = (repo / "agent_ppo/conf/monitor_builder.py").read_text(encoding="utf-8")
@@ -159,6 +270,11 @@ class AgentPpoFeatureSwapTests(unittest.TestCase):
             "adv_mean",
             "grad_norm",
             "win",
+            "action_button_%d_rate",
+            "out_of_range_button_%d_rate",
+            "action_head_%d_%d_rate",
+            "noop_enemy_in_range_rate",
+            "attack_far_out_rate",
         ]:
             self.assertIn(marker, monitor_source)
 

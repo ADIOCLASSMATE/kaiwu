@@ -10,7 +10,7 @@ Author: Tencent AI Arena Authors
 
 from kaiwudrl.common.monitor.monitor_config_builder import MonitorConfigBuilder
 
-from agent_ppo.conf.conf import GameConfig
+from agent_ppo.conf.conf import FeatureConfig, GameConfig
 
 
 def build_monitor():
@@ -169,6 +169,10 @@ def build_monitor():
         ("out_of_range_rate", "越程攻击占比", "0.0001"),
         ("out_of_range_sum", "越程惩罚累计", "0.001"),
         ("attack_action_cnt", "攻击动作次数", "1"),
+        ("resolved_attack_cnt", "可解析攻击次数", "1"),
+        ("attack_in_range_rate", "攻击在射程内占比", "0.0001"),
+        ("attack_near_out_rate", "轻微越程占比", "0.0001"),
+        ("attack_far_out_rate", "严重越程占比", "0.0001"),
         ("last_hit_window_cnt", "补刀窗口帧数", "1"),
         ("last_hit_window_attack_rate", "补刀窗口命中率", "0.0001"),
         ("frontline_presence_rate", "前场存在率", "0.0001"),
@@ -182,20 +186,58 @@ def build_monitor():
         )
     builder = builder.end_group()
 
+    # ---- 越程细分：定位越程来自哪个动作和哪个目标类型 ----
+    builder = builder.add_group(group_name="越程细分", group_name_en="out_of_range_breakdown")
+    for button in GameConfig.ATTACK_BUTTONS:
+        cnt = "out_of_range_button_%d_cnt" % button
+        rate = "out_of_range_button_%d_rate" % button
+        builder = (
+            builder.add_panel(name="Button%d越程次数" % button, name_en=cnt, type="line", unit="")
+            .add_metric(metrics_name=cnt, expr="round(avg(%s{}), 1)" % cnt)
+            .end_panel()
+            .add_panel(name="Button%d越程占比" % button, name_en=rate, type="line", unit="")
+            .add_metric(metrics_name=rate, expr="round(avg(%s{}), 0.0001)" % rate)
+            .end_panel()
+        )
+    for bucket, cn in [
+        ("enemy_hero", "敌英雄"),
+        ("minion", "小兵"),
+        ("monster", "野怪"),
+    ]:
+        cnt = "out_of_range_target_%s_cnt" % bucket
+        rate = "out_of_range_target_%s_rate" % bucket
+        builder = (
+            builder.add_panel(name="%s越程次数" % cn, name_en=cnt, type="line", unit="")
+            .add_metric(metrics_name=cnt, expr="round(avg(%s{}), 1)" % cnt)
+            .end_panel()
+            .add_panel(name="%s越程占比" % cn, name_en=rate, type="line", unit="")
+            .add_metric(metrics_name=rate, expr="round(avg(%s{}), 0.0001)" % rate)
+            .end_panel()
+        )
+    builder = builder.end_group()
+
     # ---- action 分布诊断 ----
     builder = builder.add_group(group_name="动作分布", group_name_en="action_distribution")
     for idx in range(12):
         en = "action_button_%d" % idx
+        rate = "action_button_%d_rate" % idx
         builder = (
             builder.add_panel(name="Button%d" % idx, name_en=en, type="line", unit="")
             .add_metric(metrics_name=en, expr="round(avg(%s{}), 1)" % en)
             .end_panel()
+            .add_panel(name="Button%d占比" % idx, name_en=rate, type="line", unit="")
+            .add_metric(metrics_name=rate, expr="round(avg(%s{}), 0.0001)" % rate)
+            .end_panel()
         )
     for idx in range(9):
         en = "action_target_%d" % idx
+        rate = "action_target_%d_rate" % idx
         builder = (
             builder.add_panel(name="Target%d" % idx, name_en=en, type="line", unit="")
             .add_metric(metrics_name=en, expr="round(avg(%s{}), 1)" % en)
+            .end_panel()
+            .add_panel(name="Target%d占比" % idx, name_en=rate, type="line", unit="")
+            .add_metric(metrics_name=rate, expr="round(avg(%s{}), 0.0001)" % rate)
             .end_panel()
         )
     for en, cn in [
@@ -212,6 +254,33 @@ def build_monitor():
             .add_metric(metrics_name=en, expr="round(avg(%s{}), 1)" % en)
             .end_panel()
         )
+    builder = builder.end_group()
+
+    # ---- 方向头实际分布：entropy 之外确认方向头是否偏向中心/边界 ----
+    direction_heads = [
+        (1, "MoveX"),
+        (2, "MoveZ"),
+        (3, "SkillX"),
+        (4, "SkillZ"),
+    ]
+    builder = builder.add_group(group_name="方向头分布", group_name_en="direction_head_distribution")
+    for head, label in direction_heads:
+        for idx in range(16):
+            en = "action_head_%d_%d" % (head, idx)
+            rate = "action_head_%d_%d_rate" % (head, idx)
+            builder = (
+                builder.add_panel(name="%s-%d" % (label, idx), name_en=en, type="line", unit="")
+                .add_metric(metrics_name=en, expr="round(avg(%s{}), 1)" % en)
+                .end_panel()
+                .add_panel(
+                    name="%s-%d占比" % (label, idx),
+                    name_en=rate,
+                    type="line",
+                    unit="",
+                )
+                .add_metric(metrics_name=rate, expr="round(avg(%s{}), 0.0001)" % rate)
+                .end_panel()
+            )
     builder = builder.end_group()
 
     # ---- 攻击动作 target 联合分布诊断 ----
@@ -259,6 +328,26 @@ def build_monitor():
             )
     builder = builder.end_group()
 
+    # ---- No-op 场景：确认空动作是否发生在可交互窗口 ----
+    noop_items = [
+        ("noop_cnt", "No-op次数", "1"),
+        ("noop_rate", "No-op占比", "0.0001"),
+        ("noop_enemy_in_range_cnt", "敌人在普攻范围内No-op次数", "1"),
+        ("noop_enemy_in_range_rate", "敌人在普攻范围内No-op占比", "0.0001"),
+        ("noop_last_hit_window_cnt", "补刀窗口No-op次数", "1"),
+        ("noop_last_hit_window_rate", "补刀窗口No-op占比", "0.0001"),
+        ("noop_frontline_cnt", "前场No-op次数", "1"),
+        ("noop_frontline_rate", "前场No-op占比", "0.0001"),
+    ]
+    builder = builder.add_group(group_name="No-op场景", group_name_en="noop_context")
+    for en, cn, prec in noop_items:
+        builder = (
+            builder.add_panel(name=cn, name_en=en, type="line", unit="")
+            .add_metric(metrics_name=en, expr="round(avg(%s{}), %s)" % (en, prec))
+            .end_panel()
+        )
+    builder = builder.end_group()
+
     # ---- action mask 健康度：确认无目标普攻被约束到 button 层 ----
     mask_items = [
         ("button3_legal_checked_cnt", "普攻合法检查次数", "1"),
@@ -304,6 +393,27 @@ def build_monitor():
     ]
     builder = builder.add_group(group_name="对局结果", group_name_en="outcome")
     for en, cn, prec in outcome_items:
+        builder = (
+            builder.add_panel(name=cn, name_en=en, type="line", unit="")
+            .add_metric(metrics_name=en, expr="round(avg(%s{}), %s)" % (en, prec))
+            .end_panel()
+        )
+    builder = builder.end_group()
+
+    # ---- 训练分布：确认多英雄与混合对手真的按预期采样 ----
+    train_dist_items = [
+        ("opponent_selfplay", "Self-play对手占比", "0.0001"),
+        ("opponent_common_ai", "CommonAI对手占比", "0.0001"),
+        ("opponent_model_pool", "模型池对手占比", "0.0001"),
+    ]
+    for hero_id in FeatureConfig.HERO_CONFIG_IDS:
+        train_dist_items.extend([
+            ("hero_%d" % hero_id, "己方英雄%d占比" % hero_id, "0.0001"),
+            ("enemy_hero_%d" % hero_id, "敌方英雄%d占比" % hero_id, "0.0001"),
+            ("mirror_%d" % hero_id, "镜像%d占比" % hero_id, "0.0001"),
+        ])
+    builder = builder.add_group(group_name="训练分布", group_name_en="training_distribution")
+    for en, cn, prec in train_dist_items:
         builder = (
             builder.add_panel(name=cn, name_en=en, type="line", unit="")
             .add_metric(metrics_name=en, expr="round(avg(%s{}), %s)" % (en, prec))

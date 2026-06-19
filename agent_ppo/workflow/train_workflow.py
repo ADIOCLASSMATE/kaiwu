@@ -11,6 +11,7 @@ Author: Tencent AI Arena Authors
 import os
 import time
 import random
+import tomllib
 from agent_ppo.feature.definition import (
     sample_process,
     build_frame,
@@ -25,6 +26,9 @@ from tools.metrics_utils import get_training_metrics
 from common_python.utils.workflow_disaster_recovery import handle_disaster_recovery
 
 
+TRAIN_ENV_CONFIG_PATH = "agent_ppo/conf/train_env_conf.toml"
+
+
 def workflow(envs, agents, logger=None, monitor=None, *args, **kwargs):
     # Whether the agent is training, corresponding to do_predicts
     # 智能体是否进行训练
@@ -34,13 +38,15 @@ def workflow(envs, agents, logger=None, monitor=None, *args, **kwargs):
     # Create environment configuration manager instance
     # 创建对局配置管理器实例
     env_conf_manager = EnvConfManager(
-        config_path="agent_ppo/conf/train_env_conf.toml",
+        config_path=TRAIN_ENV_CONFIG_PATH,
         logger=logger,
     )
 
     # Lineup iterator (112:Luban, 133:DiRenjie, 199:Arli)
     # 阵容迭代器 (112:鲁班, 133:狄仁杰, 199:公孙离)
-    lineup_iterator = lineup_iterator_roundrobin_camp_heroes([112, 133, 199])
+    lineup_iterator = lineup_iterator_roundrobin_camp_heroes(
+        _lineup_heroes_from_config(TRAIN_ENV_CONFIG_PATH)
+    )
 
     # Create EpisodeRunner instance
     # 创建 EpisodeRunner 实例
@@ -70,6 +76,24 @@ def workflow(envs, agents, logger=None, monitor=None, *args, **kwargs):
                 last_save_model_time = now
 
 
+def _lineup_heroes_from_config(config_path):
+    default = [112, 133, 199]
+    try:
+        with open(config_path, "rb") as f:
+            data = tomllib.load(f)
+    except (OSError, tomllib.TOMLDecodeError):
+        return default
+
+    lineups = data.get("lineups", {})
+    hero_ids = []
+    for camp_key in ("blue_camp", "red_camp"):
+        for item in lineups.get(camp_key, []) or []:
+            hero_id = item.get("hero_id")
+            if hero_id not in hero_ids:
+                hero_ids.append(hero_id)
+    return hero_ids or default
+
+
 class EpisodeRunner:
     def __init__(self, env, agents, logger, monitor, env_conf_manager, lineup_iterator):
         self.env = env
@@ -81,6 +105,178 @@ class EpisodeRunner:
         self.agent_num = len(agents)
         self.episode_cnt = 0
         self.last_report_monitor_time = 0
+        self.train_opponent_mix = self._load_train_opponent_mix(TRAIN_ENV_CONFIG_PATH)
+
+    def _load_train_opponent_mix(self, config_path):
+        default = {
+            "enable": False,
+            "dynamic": False,
+            "selfplay": 1.0,
+            "common_ai": 0.0,
+            "model_pool": 0.0,
+            "common_ai_low_win_rate": 0.05,
+            "common_ai_high_win_rate": 0.25,
+            "low_win_selfplay": 0.4,
+            "low_win_common_ai": 0.6,
+            "mid_win_selfplay": 0.35,
+            "mid_win_common_ai": 0.65,
+            "high_win_selfplay": 0.5,
+            "high_win_common_ai": 0.5,
+        }
+        try:
+            with open(config_path, "rb") as f:
+                data = tomllib.load(f)
+        except (OSError, tomllib.TOMLDecodeError) as exc:
+            self.logger.info(f"failed to load train opponent mix config: {exc}; disabled")
+            return default
+
+        mix = data.get("episode", {}).get("train_opponent_mix", {})
+        if not mix:
+            return default
+
+        cfg = {
+            "enable": bool(mix.get("enable", default["enable"])),
+            "dynamic": bool(mix.get("dynamic", default["dynamic"])),
+            "selfplay": max(0.0, float(mix.get("selfplay", default["selfplay"]))),
+            "common_ai": max(0.0, float(mix.get("common_ai", default["common_ai"]))),
+            "model_pool": max(0.0, float(mix.get("model_pool", default["model_pool"]))),
+            "common_ai_low_win_rate": float(
+                mix.get("common_ai_low_win_rate", default["common_ai_low_win_rate"])
+            ),
+            "common_ai_high_win_rate": float(
+                mix.get("common_ai_high_win_rate", default["common_ai_high_win_rate"])
+            ),
+            "low_win_selfplay": max(
+                0.0,
+                float(mix.get("low_win_selfplay", default["low_win_selfplay"])),
+            ),
+            "low_win_common_ai": max(
+                0.0,
+                float(mix.get("low_win_common_ai", default["low_win_common_ai"])),
+            ),
+            "mid_win_selfplay": max(
+                0.0,
+                float(mix.get("mid_win_selfplay", default["mid_win_selfplay"])),
+            ),
+            "mid_win_common_ai": max(
+                0.0,
+                float(mix.get("mid_win_common_ai", default["mid_win_common_ai"])),
+            ),
+            "high_win_selfplay": max(
+                0.0,
+                float(mix.get("high_win_selfplay", default["high_win_selfplay"])),
+            ),
+            "high_win_common_ai": max(
+                0.0,
+                float(mix.get("high_win_common_ai", default["high_win_common_ai"])),
+            ),
+        }
+        if cfg["selfplay"] + cfg["common_ai"] + cfg["model_pool"] <= 0:
+            cfg["enable"] = False
+        self.logger.info(f"train opponent mix config: {cfg}")
+        return cfg
+
+    def _common_ai_win_rate(self, training_metrics):
+        if not isinstance(training_metrics, dict):
+            return None
+        candidates = []
+        env = training_metrics.get("env")
+        if isinstance(env, dict):
+            candidates.extend([
+                env.get("common_ai"),
+                env.get("env_common_ai"),
+            ])
+        candidates.extend([
+            training_metrics.get("env_common_ai"),
+            training_metrics.get("common_ai"),
+        ])
+        for item in candidates:
+            if not isinstance(item, dict):
+                continue
+            try:
+                return float(item["win_rate"])
+            except (KeyError, TypeError, ValueError):
+                continue
+        return None
+
+    def _effective_train_opponent_mix(self, training_metrics=None):
+        cfg = dict(self.train_opponent_mix)
+        if not cfg.get("enable", False) or not cfg.get("dynamic", False):
+            return cfg
+
+        win_rate = self._common_ai_win_rate(training_metrics)
+        low_threshold = cfg.get("common_ai_low_win_rate", 0.05)
+        high_threshold = cfg.get("common_ai_high_win_rate", 0.25)
+        if win_rate is None:
+            cfg["selfplay"] = cfg.get("selfplay", 0.5)
+            cfg["common_ai"] = cfg.get("common_ai", 0.5)
+        elif win_rate < low_threshold:
+            cfg["selfplay"] = cfg.get("low_win_selfplay", 0.4)
+            cfg["common_ai"] = cfg.get("low_win_common_ai", 0.6)
+        elif win_rate < high_threshold:
+            cfg["selfplay"] = cfg.get("mid_win_selfplay", 0.35)
+            cfg["common_ai"] = cfg.get("mid_win_common_ai", 0.65)
+        else:
+            cfg["selfplay"] = cfg.get("high_win_selfplay", 0.5)
+            cfg["common_ai"] = cfg.get("high_win_common_ai", 0.5)
+        self.logger.info(
+            f"dynamic train opponent mix: common_ai_win_rate={win_rate}, "
+            f"selfplay={cfg['selfplay']}, common_ai={cfg['common_ai']}"
+        )
+        return cfg
+
+    def _select_train_opponent_agent(
+        self,
+        configured_opponent_agent,
+        is_eval,
+        is_train_test,
+        training_metrics=None,
+    ):
+        if is_eval or is_train_test or not self.train_opponent_mix.get("enable", False):
+            return configured_opponent_agent
+
+        mix = self._effective_train_opponent_mix(training_metrics)
+        choices = []
+        weights = []
+        if mix.get("selfplay", 0.0) > 0:
+            choices.append("selfplay")
+            weights.append(mix["selfplay"])
+        if mix.get("common_ai", 0.0) > 0:
+            choices.append("common_ai")
+            weights.append(mix["common_ai"])
+        if mix.get("model_pool", 0.0) > 0:
+            candidate_models = get_valid_model_pool(self.logger)
+            if candidate_models:
+                choices.append(str(random.choice(candidate_models)))
+                weights.append(mix["model_pool"])
+            else:
+                self.logger.info("train opponent mix skips model_pool because kaiwu.json model_pool is empty")
+
+        if not choices:
+            return configured_opponent_agent
+        selected = random.choices(choices, weights=weights, k=1)[0]
+        self.logger.info(f"train opponent selected: {selected}")
+        return selected
+
+    def _prepare_episode_opponent(
+        self,
+        usr_conf,
+        is_eval,
+        is_train_test,
+        training_metrics=None,
+    ):
+        episode_conf = usr_conf.setdefault("episode", {})
+        configured_opponent_agent = (
+            episode_conf.get("opponent_agent") or self.env_conf_manager.get_opponent_agent()
+        )
+        opponent_agent = self._select_train_opponent_agent(
+            configured_opponent_agent,
+            is_eval,
+            is_train_test,
+            training_metrics=training_metrics,
+        )
+        episode_conf["opponent_agent"] = opponent_agent
+        return opponent_agent
 
     def _call_init_config(self, usr_conf):
         """Call init_config on both agents to get summoner skill selections,
@@ -159,6 +355,27 @@ class EpisodeRunner:
             out["win"] = 0.5
         return out
 
+    def _episode_lineup_metrics(self, usr_conf, monitor_side, opponent_agent):
+        blue_hero_ids, red_hero_ids = EnvConfManager.extract_hero_ids_from_usr_conf(usr_conf)
+        my_heroes = blue_hero_ids if monitor_side == 0 else red_hero_ids
+        enemy_heroes = red_hero_ids if monitor_side == 0 else blue_hero_ids
+        my_hero = my_heroes[0] if my_heroes else 0
+        enemy_hero = enemy_heroes[0] if enemy_heroes else 0
+
+        out = {
+            "opponent_selfplay": 1.0 if opponent_agent == "selfplay" else 0.0,
+            "opponent_common_ai": 1.0 if opponent_agent == "common_ai" else 0.0,
+            "opponent_model_pool": 0.0,
+        }
+        if opponent_agent not in ("selfplay", "common_ai"):
+            out["opponent_model_pool"] = 1.0
+
+        for hero_id in (112, 133, 199):
+            out[f"hero_{hero_id}"] = 1.0 if my_hero == hero_id else 0.0
+            out[f"enemy_hero_{hero_id}"] = 1.0 if enemy_hero == hero_id else 0.0
+            out[f"mirror_{hero_id}"] = 1.0 if my_hero == hero_id and enemy_hero == hero_id else 0.0
+        return out
+
     def run_episodes(self):
         # Single environment process
         # 单局流程
@@ -179,6 +396,13 @@ class EpisodeRunner:
             # 更新对局配置, 可以用长度为2的列表传入当前对局的阵容id
             lineup = next(self.lineup_iterator)
             usr_conf, is_eval, monitor_side = self.env_conf_manager.update_config(lineup)
+            is_train_test = os.environ.get("is_train_test", "False").lower() == "true"
+            opponent_agent = self._prepare_episode_opponent(
+                usr_conf,
+                is_eval,
+                is_train_test,
+                training_metrics=training_metrics,
+            )
 
             # Call init_config on agents to get summoner skill selections
             # 调用 agent 的 init_config 获取召唤师技能选择，注入 usr_conf
@@ -198,7 +422,11 @@ class EpisodeRunner:
 
             # Reset agents
             # 重置智能体
-            self.reset_agents(observation)
+            self.reset_agents(
+                observation,
+                opponent_agent=opponent_agent,
+                is_eval=is_eval,
+            )
 
             # Reset environment frame collector
             # 重置环境帧收集器
@@ -210,7 +438,6 @@ class EpisodeRunner:
             frame_no = 0
             reward_sum_list = [0] * self.agent_num
             reward_item_sum = {}
-            is_train_test = os.environ.get("is_train_test", "False").lower() == "true"
             self.logger.info(f"Episode {self.episode_cnt} start, usr_conf is {usr_conf}")
 
             # Reward initialization
@@ -316,6 +543,13 @@ class EpisodeRunner:
                                 self.agents[monitor_side].consume_action_mask_stats()
                             )
                             monitor_data.update(self._episode_outcome(observation, monitor_side))
+                            monitor_data.update(
+                                self._episode_lineup_metrics(
+                                    usr_conf,
+                                    monitor_side,
+                                    opponent_agent,
+                                )
+                            )
                             monitor_data.update(self.agents[monitor_side].get_feature_stats())
                             if not is_eval and self.do_samples[monitor_side]:
                                 monitor_data["is_train_rate"] = round(
@@ -331,8 +565,9 @@ class EpisodeRunner:
                         yield list_agents_samples
                     break
 
-    def reset_agents(self, observation):
-        opponent_agent = self.env_conf_manager.get_opponent_agent()
+    def reset_agents(self, observation, opponent_agent=None, is_eval=False):
+        if opponent_agent is None:
+            opponent_agent = self.env_conf_manager.get_opponent_agent()
         monitor_side = self.env_conf_manager.get_monitor_side()
         is_train_test = os.environ.get("is_train_test", "False").lower() == "true"
 
@@ -361,7 +596,12 @@ class EpisodeRunner:
                 elif opponent_agent == "selfplay":
                     # Training model, "latest" - latest model, "random" - random model from the model pool
                     # 加载训练过的模型，可以选择最新模型，也可以选择随机模型 "latest" - 最新模型, "random" - 模型池中随机模型
-                    agent.load_model(id="latest")
+                    opponent_model_id = "latest" if is_eval or is_train_test else "random"
+                    self.logger.info(
+                        f"selfplay opponent loads model_id={opponent_model_id}, eval={is_eval}"
+                    )
+                    agent.load_model(id=opponent_model_id)
+                    self.do_samples[i] = False
                 else:
                     # Opponent model, model_id is checked from kaiwu.json
                     # 选择kaiwu.json中设置的对手模型, model_id 即 opponent_agent，必须设置正确否则报错

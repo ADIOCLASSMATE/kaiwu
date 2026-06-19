@@ -116,6 +116,7 @@ class GameRewardManager:
         self._last_hit_focus_event = 0.0
         self._action_button_counts = [0] * 12
         self._action_target_counts = [0] * 9
+        self._action_head_counts = [[0] * 16 for _ in range(4)]
         self._attack_target_counts = {
             "none": 0,
             "enemy_hero": 0,
@@ -138,6 +139,20 @@ class GameRewardManager:
         self._last_hit_window_cnt = 0
         self._last_hit_window_attack_cnt = 0
         self._frontline_presence_cnt = 0
+        self._noop_cnt = 0
+        self._noop_enemy_in_range_cnt = 0
+        self._noop_last_hit_window_cnt = 0
+        self._noop_frontline_cnt = 0
+        self._resolved_attack_cnt = 0
+        self._attack_in_range_cnt = 0
+        self._attack_near_out_cnt = 0
+        self._attack_far_out_cnt = 0
+        self._out_of_range_button_counts = {button: 0 for button in GameConfig.ATTACK_BUTTONS}
+        self._out_of_range_target_counts = {
+            "enemy_hero": 0,
+            "minion": 0,
+            "monster": 0,
+        }
 
     def result(self, frame_data):
         self.frame_data_process(frame_data)
@@ -199,6 +214,11 @@ class GameRewardManager:
         if self._distance_penalty < 0:
             self._out_of_range_cnt += 1
             self._out_of_range_sum += self._distance_penalty
+            if button in self._out_of_range_button_counts:
+                self._out_of_range_button_counts[button] += 1
+            target_bucket = self._target_bucket(action[5]) if action is not None and len(action) >= 6 else "other"
+            if target_bucket in self._out_of_range_target_counts:
+                self._out_of_range_target_counts[target_bucket] += 1
         self._tower_attack_event = self.tower_attack_reward(
             action,
             decided_frame_state,
@@ -220,6 +240,17 @@ class GameRewardManager:
             self._action_button_counts[button] += 1
         if 0 <= target < len(self._action_target_counts):
             self._action_target_counts[target] += 1
+        for head_index, value in enumerate(action[1:5]):
+            try:
+                head_value = int(value)
+            except (TypeError, ValueError):
+                continue
+            if 0 <= head_value < len(self._action_head_counts[head_index]):
+                self._action_head_counts[head_index][head_value] += 1
+
+        if button == 1:
+            self._record_noop_context(decided_frame_state)
+
         bucket = self._target_bucket(target)
         self._attack_target_counts[bucket] = self._attack_target_counts.get(bucket, 0) + 1
         if button in GameConfig.ATTACK_BUTTONS:
@@ -228,6 +259,7 @@ class GameRewardManager:
             )
             if 0 <= button < len(self._attack_button_target_counts) and 0 <= target < 9:
                 self._attack_button_target_counts[button][target] += 1
+            self._record_attack_range_quality(decided_frame_state, target)
 
         if self._has_last_hit_window(decided_frame_state):
             self._last_hit_window_cnt += 1
@@ -252,6 +284,36 @@ class GameRewardManager:
         if target == 8:
             return "monster"
         return "other"
+
+    def _record_noop_context(self, decided_frame_state):
+        self._noop_cnt += 1
+        if self._enemy_hero_in_main_attack_range(decided_frame_state):
+            self._noop_enemy_in_range_cnt += 1
+        if self._has_last_hit_window(decided_frame_state):
+            self._noop_last_hit_window_cnt += 1
+        if self._is_frontline_state(decided_frame_state):
+            self._noop_frontline_cnt += 1
+
+    def _record_attack_range_quality(self, decided_frame_state, target):
+        mh = self._main_hero(decided_frame_state)
+        if mh is None:
+            return
+        target_pos = self._target_position(decided_frame_state, target)
+        if target_pos is None:
+            return
+        atk_range = float(mh.get("attack_range", 0) or 0)
+        if atk_range <= 0:
+            return
+        loc = mh.get("location", {})
+        mpos = (loc["x"], loc["z"])
+        dist = math.hypot(target_pos[0] - mpos[0], target_pos[1] - mpos[1])
+        self._resolved_attack_cnt += 1
+        if dist <= atk_range:
+            self._attack_in_range_cnt += 1
+        elif dist <= atk_range * 1.25:
+            self._attack_near_out_cnt += 1
+        else:
+            self._attack_far_out_cnt += 1
 
     def tower_attack_reward(self, action, decided_frame_state):
         """Return 1.0 for a safe, in-range tower attack choice; else 0.0."""
@@ -325,6 +387,7 @@ class GameRewardManager:
         """Return per-episode reward health stats and reset their counters."""
         attack_cnt = self._attack_action_cnt
         frame_cnt = self._reward_frame_cnt
+        action_cnt = sum(self._action_button_counts)
         out_of_range_rate = self._out_of_range_cnt / attack_cnt if attack_cnt > 0 else 0.0
         idle_triggered_rate = self._idle_triggered_cnt / frame_cnt if frame_cnt > 0 else 0.0
         stats = {
@@ -332,6 +395,39 @@ class GameRewardManager:
             "out_of_range_rate": round(out_of_range_rate, 4),
             "out_of_range_sum": round(self._out_of_range_sum, 3),
             "attack_action_cnt": attack_cnt,
+            "resolved_attack_cnt": self._resolved_attack_cnt,
+            "attack_in_range_rate": round(
+                self._attack_in_range_cnt / self._resolved_attack_cnt
+                if self._resolved_attack_cnt > 0 else 0.0,
+                4,
+            ),
+            "attack_near_out_rate": round(
+                self._attack_near_out_cnt / self._resolved_attack_cnt
+                if self._resolved_attack_cnt > 0 else 0.0,
+                4,
+            ),
+            "attack_far_out_rate": round(
+                self._attack_far_out_cnt / self._resolved_attack_cnt
+                if self._resolved_attack_cnt > 0 else 0.0,
+                4,
+            ),
+            "noop_cnt": self._noop_cnt,
+            "noop_rate": round(self._noop_cnt / action_cnt if action_cnt > 0 else 0.0, 4),
+            "noop_enemy_in_range_cnt": self._noop_enemy_in_range_cnt,
+            "noop_enemy_in_range_rate": round(
+                self._noop_enemy_in_range_cnt / self._noop_cnt if self._noop_cnt > 0 else 0.0,
+                4,
+            ),
+            "noop_last_hit_window_cnt": self._noop_last_hit_window_cnt,
+            "noop_last_hit_window_rate": round(
+                self._noop_last_hit_window_cnt / self._noop_cnt if self._noop_cnt > 0 else 0.0,
+                4,
+            ),
+            "noop_frontline_cnt": self._noop_frontline_cnt,
+            "noop_frontline_rate": round(
+                self._noop_frontline_cnt / self._noop_cnt if self._noop_cnt > 0 else 0.0,
+                4,
+            ),
             "idle_triggered": self._idle_triggered_cnt,
             "idle_triggered_rate": round(idle_triggered_rate, 4),
             "last_hit_window_cnt": self._last_hit_window_cnt,
@@ -347,8 +443,24 @@ class GameRewardManager:
         }
         for idx, value in enumerate(self._action_button_counts):
             stats[f"action_button_{idx}"] = value
+            stats[f"action_button_{idx}_rate"] = round(
+                value / action_cnt if action_cnt > 0 else 0.0,
+                4,
+            )
         for idx, value in enumerate(self._action_target_counts):
             stats[f"action_target_{idx}"] = value
+            stats[f"action_target_{idx}_rate"] = round(
+                value / action_cnt if action_cnt > 0 else 0.0,
+                4,
+            )
+        for head_index, row in enumerate(self._action_head_counts, start=1):
+            row_total = sum(row)
+            for value_index, value in enumerate(row):
+                stats[f"action_head_{head_index}_{value_index}"] = value
+                stats[f"action_head_{head_index}_{value_index}_rate"] = round(
+                    value / row_total if row_total > 0 else 0.0,
+                    4,
+                )
         for key, value in self._attack_target_counts.items():
             stats[f"attack_target_{key}"] = value
         for key, value in self._attack_action_target_counts.items():
@@ -366,6 +478,21 @@ class GameRewardManager:
                     value / row_total if row_total > 0 else 0.0,
                     4,
                 )
+        for button in GameConfig.ATTACK_BUTTONS:
+            value = self._out_of_range_button_counts.get(button, 0)
+            button_total = self._action_button_counts[button]
+            stats[f"out_of_range_button_{button}_cnt"] = value
+            stats[f"out_of_range_button_{button}_rate"] = round(
+                value / button_total if button_total > 0 else 0.0,
+                4,
+            )
+        for bucket in ("enemy_hero", "minion", "monster"):
+            value = self._out_of_range_target_counts.get(bucket, 0)
+            stats[f"out_of_range_target_{bucket}_cnt"] = value
+            stats[f"out_of_range_target_{bucket}_rate"] = round(
+                value / self._out_of_range_cnt if self._out_of_range_cnt > 0 else 0.0,
+                4,
+            )
         self._attack_action_cnt = 0
         self._out_of_range_cnt = 0
         self._out_of_range_sum = 0.0
@@ -373,6 +500,7 @@ class GameRewardManager:
         self._idle_triggered_cnt = 0
         self._action_button_counts = [0] * 12
         self._action_target_counts = [0] * 9
+        self._action_head_counts = [[0] * 16 for _ in range(4)]
         self._attack_target_counts = {
             "none": 0,
             "enemy_hero": 0,
@@ -395,6 +523,20 @@ class GameRewardManager:
         self._last_hit_window_cnt = 0
         self._last_hit_window_attack_cnt = 0
         self._frontline_presence_cnt = 0
+        self._noop_cnt = 0
+        self._noop_enemy_in_range_cnt = 0
+        self._noop_last_hit_window_cnt = 0
+        self._noop_frontline_cnt = 0
+        self._resolved_attack_cnt = 0
+        self._attack_in_range_cnt = 0
+        self._attack_near_out_cnt = 0
+        self._attack_far_out_cnt = 0
+        self._out_of_range_button_counts = {button: 0 for button in GameConfig.ATTACK_BUTTONS}
+        self._out_of_range_target_counts = {
+            "enemy_hero": 0,
+            "minion": 0,
+            "monster": 0,
+        }
         return stats
 
     # ---- distance shaping 辅助：定位主英雄 / 敌英雄 / 第 k 近敌方小兵 / 最近野怪 ----
@@ -412,6 +554,18 @@ class GameRewardManager:
                     return None
                 return (loc["x"], loc["z"])
         return None
+
+    def _enemy_hero_in_main_attack_range(self, fs):
+        mh = self._main_hero(fs)
+        enemy_pos = self._enemy_hero_pos(fs)
+        if mh is None or enemy_pos is None:
+            return False
+        attack_range = float(mh.get("attack_range", 0) or 0)
+        if attack_range <= 0:
+            return False
+        loc = mh.get("location", {})
+        mpos = (loc["x"], loc["z"])
+        return math.hypot(enemy_pos[0] - mpos[0], enemy_pos[1] - mpos[1]) <= attack_range
 
     def _nth_enemy_minion_pos(self, fs, k):
         mh = self._main_hero(fs)
@@ -481,6 +635,45 @@ class GameRewardManager:
             cand.append((math.hypot(p[0] - mpos[0], p[1] - mpos[1]), p))
         cand.sort(key=lambda t: t[0])
         return cand[0][1] if cand else None
+
+    def _target_position(self, fs, target):
+        if target == 1:
+            return self._enemy_hero_pos(fs)
+        if 3 <= target <= 6:
+            return self._nth_enemy_minion_pos(fs, target - 3)
+        if target == 7:
+            mh = self._main_hero(fs)
+            if mh is None:
+                return None
+            enemy_camp = 2 if mh.get("camp") == 1 else 1
+            _, enemy_tower = self._get_camp_units(fs, enemy_camp)
+            if enemy_tower is None or self._is_sentinel(enemy_tower.get("location", {})):
+                return None
+            loc = enemy_tower.get("location", {})
+            return (loc["x"], loc["z"])
+        if target == 8:
+            return self._nearest_monster_pos(fs)
+        return None
+
+    def _is_frontline_state(self, fs):
+        mh = self._main_hero(fs)
+        if mh is None:
+            return False
+        main_camp = mh.get("camp")
+        if main_camp not in (1, 2):
+            return False
+        enemy_camp = 2 if main_camp == 1 else 1
+        main_hero, main_tower = self._get_camp_units(fs, main_camp)
+        enemy_hero, enemy_tower = self._get_camp_units(fs, enemy_camp)
+        state = self.calculate_lane_presence_state(
+            fs,
+            main_camp,
+            main_hero,
+            main_tower,
+            enemy_hero,
+            enemy_tower,
+        )
+        return bool(state.get("frontline"))
 
     @staticmethod
     def _is_resource_monster(npc):
