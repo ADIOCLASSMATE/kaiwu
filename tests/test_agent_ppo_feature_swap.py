@@ -5,6 +5,10 @@ try:
     import torch
 
     from agent_ppo.conf.conf import Config, FeatureConfig, GameConfig
+    from agent_ppo.feature.action_mask import (
+        adjust_raw_legal_action_for_button_targets,
+        adjust_target_legal_for_button,
+    )
     from agent_ppo.feature.feature_process import FeatureProcess
     from agent_ppo.feature.reward_process import GameRewardManager
     from agent_ppo.model.model import Model
@@ -13,6 +17,8 @@ except ModuleNotFoundError:
     Config = None
     FeatureConfig = None
     GameConfig = None
+    adjust_raw_legal_action_for_button_targets = None
+    adjust_target_legal_for_button = None
     FeatureProcess = None
     GameRewardManager = None
     Model = None
@@ -119,6 +125,42 @@ class AgentPpoFeatureSwapTests(unittest.TestCase):
         ]
 
         self.assertEqual(offenders, [])
+
+    def test_ppo_action_mask_blocks_normal_attack_without_entity_target(self):
+        legal_action = torch.ones(sum(Config.LEGAL_ACTION_SIZE_LIST)).numpy()
+        target_size = Config.LABEL_SIZE_LIST[-1]
+        button_size = Config.LABEL_SIZE_LIST[0]
+        target_matrix = legal_action[-target_size * button_size:].reshape(button_size, target_size)
+        target_matrix[3, :] = 0
+        target_matrix[3, 0] = 1
+        target_matrix[3, 2] = 1
+
+        adjusted, stats = adjust_raw_legal_action_for_button_targets(
+            legal_action,
+            return_stats=True,
+        )
+
+        adjusted_target = adjusted[-target_size * button_size:].reshape(button_size, target_size)
+        self.assertEqual(adjusted[3], 0)
+        self.assertEqual(adjusted_target[3, 0], 0)
+        self.assertEqual(adjusted_target[3, 2], 0)
+        self.assertEqual(stats["button3_no_entity_target_legal_cnt"], 1)
+        self.assertEqual(stats["button3_masked_no_entity_target_cnt"], 1)
+
+    def test_ppo_monitor_builder_declares_observability_panels(self):
+        repo = Path(__file__).resolve().parents[1]
+        monitor_source = (repo / "agent_ppo/conf/monitor_builder.py").read_text(encoding="utf-8")
+        for marker in [
+            "feat_%s_exists",
+            "rwd_tower_hp_point",
+            "attack_action_target_%s_rate",
+            "button3_entity_target_legal_rate",
+            "entropy_\" + en_suffix",
+            "adv_mean",
+            "grad_norm",
+            "win",
+        ]:
+            self.assertIn(marker, monitor_source)
 
 
 if __name__ == "__main__":

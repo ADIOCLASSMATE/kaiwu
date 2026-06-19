@@ -118,6 +118,47 @@ class EpisodeRunner:
                 f"Agent[{agent_idx}] init_config: camp={camp_key}, select_skills={select_skills}"
             )
 
+    def _episode_outcome(self, observation, monitor_side):
+        out = {}
+        tower_subtype = 21
+        try:
+            frame_state = observation[str(monitor_side)]["frame_state"]
+        except (KeyError, TypeError):
+            return out
+
+        my_camp = observation[str(monitor_side)].get("camp")
+        my_hero = None
+        for hero in frame_state.get("hero_states", []):
+            if hero.get("camp") == my_camp:
+                my_hero = hero
+
+        if my_hero is not None:
+            out["final_level"] = my_hero.get("level", 0)
+            out["final_money"] = my_hero.get("money", 0)
+            out["kill_cnt"] = my_hero.get("kill_cnt", 0)
+            out["dead_cnt"] = my_hero.get("dead_cnt", 0)
+            max_hp = my_hero.get("max_hp", 0) or 1
+            out["final_hp_ratio"] = round(my_hero.get("hp", 0) / max_hp, 3)
+
+        own_tower_alive = False
+        enemy_tower_alive = False
+        for npc in frame_state.get("npc_states", []):
+            if npc.get("sub_type") != tower_subtype:
+                continue
+            alive = npc.get("hp", 0) > 0
+            if npc.get("camp") == my_camp:
+                own_tower_alive = own_tower_alive or alive
+            else:
+                enemy_tower_alive = enemy_tower_alive or alive
+
+        if own_tower_alive and not enemy_tower_alive:
+            out["win"] = 1.0
+        elif enemy_tower_alive and not own_tower_alive:
+            out["win"] = 0.0
+        else:
+            out["win"] = 0.5
+        return out
+
     def run_episodes(self):
         # Single environment process
         # 单局流程
@@ -168,6 +209,7 @@ class EpisodeRunner:
             self.episode_cnt += 1
             frame_no = 0
             reward_sum_list = [0] * self.agent_num
+            reward_item_sum = {}
             is_train_test = os.environ.get("is_train_test", "False").lower() == "true"
             self.logger.info(f"Episode {self.episode_cnt} start, usr_conf is {usr_conf}")
 
@@ -224,6 +266,10 @@ class EpisodeRunner:
                         reward = agent.reward_manager.result(observation[str(i)]["frame_state"])
                         observation[str(i)]["reward"] = reward
                         reward_sum_list[i] += reward["reward_sum"]
+                        if i == monitor_side:
+                            for key, value in reward.items():
+                                if key != "reward_sum":
+                                    reward_item_sum[key] = reward_item_sum.get(key, 0.0) + value
 
                 # Normal end or timeout exit, run train_test will exit early
                 # 正常结束或超时退出，运行train_test时会提前退出
@@ -237,6 +283,11 @@ class EpisodeRunner:
                                 observation[str(i)].get("win"),
                             )
                             reward_sum_list[i] += terminal_bonus
+                            if i == monitor_side:
+                                reward_item_sum["terminal"] = (
+                                    reward_item_sum.get("terminal", 0.0)
+                                    + observation[str(i)]["reward"]["terminal"]
+                                )
                     self.logger.info(
                         f"episode_{self.episode_cnt} terminated in fno_{frame_no}, truncated:{truncated}, eval:{is_eval}, reward_sum:{reward_sum_list[monitor_side]}"
                     )
@@ -253,8 +304,23 @@ class EpisodeRunner:
                     if now - self.last_report_monitor_time >= 60:
                         monitor_data = {"episode_cnt": self.episode_cnt}
                         if self.monitor:
-                            if is_eval:
-                                monitor_data["reward"] = round(reward_sum_list[monitor_side], 2)
+                            monitor_data["reward"] = round(reward_sum_list[monitor_side], 2)
+                            monitor_data["episode_len"] = frame_no
+                            for key, value in reward_item_sum.items():
+                                monitor_data["rwd_" + key] = round(value, 3)
+
+                            monitor_data.update(
+                                self.agents[monitor_side].reward_manager.consume_monitor_stats()
+                            )
+                            monitor_data.update(
+                                self.agents[monitor_side].consume_action_mask_stats()
+                            )
+                            monitor_data.update(self._episode_outcome(observation, monitor_side))
+                            monitor_data.update(self.agents[monitor_side].get_feature_stats())
+                            if not is_eval and self.do_samples[monitor_side]:
+                                monitor_data["is_train_rate"] = round(
+                                    frame_collector.is_train_rate(monitor_side), 4
+                                )
                             self.monitor.put_data({os.getpid(): monitor_data})
                             self.last_report_monitor_time = now
 

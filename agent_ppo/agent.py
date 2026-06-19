@@ -17,10 +17,15 @@ import os
 import random
 from agent_ppo.model.model import Model
 from agent_ppo.feature.definition import *
+from agent_ppo.feature.action_mask import (
+    action_mask_stats_rates,
+    adjust_raw_legal_action_for_button_targets,
+    adjust_target_legal_for_button,
+)
 import numpy as np
 from kaiwudrl.interface.agent import BaseAgent
 
-from agent_ppo.conf.conf import Config
+from agent_ppo.conf.conf import Config, FeatureConfig
 from agent_ppo.feature.reward_process import GameRewardManager
 from torch.optim.lr_scheduler import LambdaLR
 from agent_ppo.algorithm.algorithm import Algorithm
@@ -40,7 +45,7 @@ SUMMONER_SKILL_MAP = {
     80121: "弱化",
     80115: "闪现",
 }
-SUMMONER_SKILL_IDS = list(SUMMONER_SKILL_MAP.keys())
+SUMMONER_SKILL_IDS = FeatureConfig.SUMMONER_SKILL_IDS
 
 
 class Agent(BaseAgent):
@@ -83,6 +88,13 @@ class Agent(BaseAgent):
         self.reward_manager = None
         self.logger = logger
         self.monitor = monitor
+        self._action_mask_stats = {
+            "button3_legal_checked_cnt": 0,
+            "button3_entity_target_legal_cnt": 0,
+            "button3_no_entity_target_legal_cnt": 0,
+            "button3_masked_no_entity_target_cnt": 0,
+            "button3_target0_or_self_suppressed_cnt": 0,
+        }
 
         self.algorithm = Algorithm(self.model, self.optimizer, self.scheduler, self.device, self.logger, self.monitor)
 
@@ -255,6 +267,16 @@ class Agent(BaseAgent):
         self.lstm_cell = act_data.lstm_cell
         self.lstm_hidden = act_data.lstm_hidden
 
+    def get_feature_stats(self):
+        """Return per-episode feature health stats and reset the accumulators."""
+        return self.feature_processes.get_stats()
+
+    def consume_action_mask_stats(self):
+        stats = action_mask_stats_rates(self._action_mask_stats)
+        for key in self._action_mask_stats:
+            self._action_mask_stats[key] = 0
+        return stats
+
     def _sample_masked_action(self, logits, legal_action, target_logits_by_button=None):
         """
         Sample actions from predicted logits and legal actions
@@ -270,6 +292,20 @@ class Agent(BaseAgent):
         action_list = []
         d_action_list = []
         label_split_size = [sum(self.label_size_list[: index + 1]) for index in range(len(self.label_size_list))]
+        legal_action, mask_stats = adjust_raw_legal_action_for_button_targets(
+            legal_action,
+            return_stats=True,
+        )
+        if not hasattr(self, "_action_mask_stats"):
+            self._action_mask_stats = {
+                "button3_legal_checked_cnt": 0,
+                "button3_entity_target_legal_cnt": 0,
+                "button3_no_entity_target_legal_cnt": 0,
+                "button3_masked_no_entity_target_cnt": 0,
+                "button3_target0_or_self_suppressed_cnt": 0,
+            }
+        for key, value in mask_stats.items():
+            self._action_mask_stats[key] = self._action_mask_stats.get(key, 0) + value
         legal_actions = np.split(legal_action, label_split_size[:-1])
         logits_split = np.split(logits, label_split_size[:-1])
         for index in range(0, len(self.label_size_list) - 1):
@@ -294,6 +330,7 @@ class Agent(BaseAgent):
         one_hot_actions = np.eye(self.label_size_list[0])[action_list[0]]
         one_hot_actions = np.reshape(one_hot_actions, [self.label_size_list[0], 1])
         target_legal_action = np.sum(target_legal_action_o * one_hot_actions, axis=0)
+        target_legal_action = adjust_target_legal_for_button(action_list[0], target_legal_action)
 
         legal_actions[index] = target_legal_action
         sample_target_logits = logits_split[-1]
@@ -307,6 +344,7 @@ class Agent(BaseAgent):
         one_hot_actions = np.eye(self.label_size_list[0])[d_action_list[0]]
         one_hot_actions = np.reshape(one_hot_actions, [self.label_size_list[0], 1])
         target_legal_action_d = np.sum(target_legal_action_o * one_hot_actions, axis=0)
+        target_legal_action_d = adjust_target_legal_for_button(d_action_list[0], target_legal_action_d)
 
         deterministic_target_logits = logits_split[-1]
         if target_logits_by_button is not None:

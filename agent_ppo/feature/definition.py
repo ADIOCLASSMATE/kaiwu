@@ -13,6 +13,10 @@ import numpy as np
 import collections
 import random
 from agent_ppo.conf.conf import Config
+from agent_ppo.feature.action_mask import (
+    adjust_raw_legal_action_for_button_targets,
+    adjust_target_legal_for_button,
+)
 import itertools
 
 # Loop through camps, shuffling camps before each major loop
@@ -118,10 +122,11 @@ def build_frame(agent, observation):
 def _update_legal_action(original_la, action):
     target_size = Config.LABEL_SIZE_LIST[-1]
     top_size = Config.LABEL_SIZE_LIST[0]
-    original_la = np.array(original_la)
+    original_la = adjust_raw_legal_action_for_button_targets(np.array(original_la))
     fix_part = original_la[: -target_size * top_size]
     target_la = original_la[-target_size * top_size :]
     target_la = target_la.reshape([top_size, target_size])[action[0]]
+    target_la = adjust_target_legal_for_button(action[0], target_la)
     return np.concatenate([fix_part, target_la], axis=0)
 
 
@@ -273,3 +278,10 @@ class FrameCollector:
 
     def __len__(self):
         return max([len(agent_samples) for agent_samples in self.rl_data_map])
+
+    def is_train_rate(self, agent_id):
+        frames = self.rl_data_map[agent_id]
+        if not frames:
+            return 0.0
+        trained = sum(1 for rl_info in frames.values() if getattr(rl_info, "is_train", 0))
+        return trained / len(frames)

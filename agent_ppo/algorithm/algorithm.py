@@ -74,6 +74,7 @@ class Algorithm:
         results["total_loss"] = total_loss.item()
 
         total_loss.backward()
+        raw_grad_norm = self._compute_grad_norm()
 
         # grad clip
         # 梯度剪裁
@@ -101,6 +102,26 @@ class Algorithm:
             results["value_loss"] = round(value_loss, 2)
             results["policy_loss"] = round(policy_loss, 2)
             results["entropy_loss"] = round(entropy_loss, 2)
+            results["grad_norm"] = round(raw_grad_norm, 4)
+            results["learning_rate"] = round(self.optimizer.param_groups[0]["lr"], 8)
+
+            head_names = ["head_0", "head_1", "head_2", "head_3", "head_4", "head_5"]
+            if hasattr(self.model, "entropy_cost_list"):
+                for name, entropy in zip(head_names, self.model.entropy_cost_list):
+                    results["entropy_" + name] = round(entropy.item(), 4)
+
+            adv_tensor = data_list[2]
+            results["adv_mean"] = round(adv_tensor.mean().item(), 4)
+            results["adv_std"] = round(adv_tensor.std().item(), 4)
+
             if self.monitor:
                 self.monitor.put_data({os.getpid(): results})
             self.last_report_monitor_time = now
+        return results
+
+    def _compute_grad_norm(self):
+        total_norm = 0.0
+        for parameter in self.parameters:
+            if parameter.grad is not None:
+                total_norm += parameter.grad.data.norm(2).item() ** 2
+        return total_norm ** 0.5
