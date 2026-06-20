@@ -360,6 +360,7 @@ def build_monitor():
         ("recall_miss_cnt", "该回城未回次数", "1"),
         ("recall_interrupt_cnt", "回城打断次数", "1"),
         ("recall_success_cnt", "回城恢复成功次数", "1"),
+        ("recall_success_reward_sum", "回城成功奖励总量", "0.001"),
         ("recall_unneeded_cnt", "不需回城误按次数", "1"),
         ("recall_button_rate_when_needed", "需求时回城按钮占比", "0.0001"),
         ("recall_explore_need_cnt", "探索回城需求次数", "1"),

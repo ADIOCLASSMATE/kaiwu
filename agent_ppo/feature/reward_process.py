@@ -166,6 +166,7 @@ class GameRewardManager:
         self._recall_miss_cnt = 0
         self._recall_interrupt_cnt = 0
         self._recall_success_cnt = 0
+        self._recall_success_reward_sum = 0.0
         self._recall_unneeded_cnt = 0
 
     def result(self, frame_data):
@@ -626,6 +627,7 @@ class GameRewardManager:
             "recall_miss_cnt": self._recall_miss_cnt,
             "recall_interrupt_cnt": self._recall_interrupt_cnt,
             "recall_success_cnt": self._recall_success_cnt,
+            "recall_success_reward_sum": round(self._recall_success_reward_sum, 3),
             "recall_unneeded_cnt": self._recall_unneeded_cnt,
             "recall_button_rate_when_needed": round(
                 (self._recall_start_cnt + self._recall_hold_cnt) / self._recall_need_cnt
@@ -738,6 +740,7 @@ class GameRewardManager:
         self._recall_miss_cnt = 0
         self._recall_interrupt_cnt = 0
         self._recall_success_cnt = 0
+        self._recall_success_reward_sum = 0.0
         self._recall_unneeded_cnt = 0
         return stats
 
@@ -1249,11 +1252,13 @@ class GameRewardManager:
             return {
                 "hp_ratio": 0.0,
                 "in_retreat_zone": False,
+                "enemy_tower_hp_ratio": 1.0,
                 "should_recall": False,
             }
         return {
             "hp_ratio": self._raw_hp_ratio(main_hero),
             "in_retreat_zone": self._in_retreat_zone(frame_data, main_hero, camp),
+            "enemy_tower_hp_ratio": self._tower_hp_ratio(enemy_tower),
             "should_recall": self.should_recall_recover(
                 frame_data,
                 camp,
@@ -1914,13 +1919,33 @@ class GameRewardManager:
                 and last_hp < GameConfig.RECALL_TARGET_HP <= cur_hp
             )
             if recovered_enough or reached_target:
-                value += GameConfig.RECALL_SUCCESS_REWARD
+                success_reward = self._recall_success_reward(previous, current)
+                value += success_reward
+                self._recall_success_reward_sum += success_reward
                 self._recall_success_cnt += 1
                 self._recall_channel_steps = 0
             elif not current.get("should_recall") and cur_hp >= GameConfig.RECALL_TARGET_HP:
                 self._recall_channel_steps = 0
 
         return self._bounded_recall_value(value)
+
+    def _recall_success_reward(self, previous, current):
+        previous_tower_hp = float(previous.get("enemy_tower_hp_ratio", 1.0) or 0.0)
+        current_tower_hp = float(current.get("enemy_tower_hp_ratio", previous_tower_hp) or 0.0)
+        tower_factor = max(
+            GameConfig.RECALL_SUCCESS_MIN_TOWER_FACTOR,
+            min(previous_tower_hp, current_tower_hp),
+        )
+        return GameConfig.RECALL_SUCCESS_REWARD * min(1.0, tower_factor)
+
+    @staticmethod
+    def _tower_hp_ratio(tower):
+        if tower is None:
+            return 1.0
+        max_hp = float(tower.get("max_hp", 0) or 0)
+        if max_hp <= 0:
+            return 1.0
+        return max(0.0, min(1.0, float(tower.get("hp", 0) or 0) / max_hp))
 
     def _bounded_recall_value(self, value):
         return self._consume_bounded_episode_budget(

@@ -549,25 +549,20 @@ class AgentPpoFeatureSwapTests(unittest.TestCase):
         self._install_base_agent_stub()
         from agent_ppo.agent import Agent
 
-        old_hold_prob = GameConfig.RECALL_EXPLORATION_HOLD_PROB
-        try:
-            GameConfig.RECALL_EXPLORATION_HOLD_PROB = 1.0
-            agent = self._recall_explore_agent()
-            agent.reward_manager._recall_channel_steps = 10
-            observation = self._recall_explore_observation()
-            act_data = SimpleNamespace(
-                action=[3, 0, 0, 0, 0, 1],
-                prob=[[0.0] * Config.LABEL_SUM],
-            )
+        agent = self._recall_explore_agent()
+        agent.reward_manager._recall_channel_steps = 10
+        observation = self._recall_explore_observation()
+        act_data = SimpleNamespace(
+            action=[3, 0, 0, 0, 0, 1],
+            prob=[[0.0] * Config.LABEL_SUM],
+        )
 
-            action = agent.action_process(observation, act_data, True)
-            stats = agent.consume_action_mask_stats()
+        action = agent.action_process(observation, act_data, True)
+        stats = agent.consume_action_mask_stats()
 
-            self.assertEqual(action[0], GameConfig.RECALL_NOOP_BUTTON)
-            self.assertEqual(stats["recall_explore_override_cnt"], 1)
-            self.assertEqual(stats["recall_explore_hold_cnt"], 1)
-        finally:
-            GameConfig.RECALL_EXPLORATION_HOLD_PROB = old_hold_prob
+        self.assertEqual(action[0], GameConfig.RECALL_NOOP_BUTTON)
+        self.assertEqual(stats["recall_explore_override_cnt"], 1)
+        self.assertEqual(stats["recall_explore_hold_cnt"], 1)
 
     def _recall_explore_agent(self):
         self._install_base_agent_stub()
@@ -613,7 +608,41 @@ class AgentPpoFeatureSwapTests(unittest.TestCase):
         self.assertEqual(stats["recall_need_cnt"], 1)
         self.assertEqual(stats["recall_start_cnt"], 1)
         self.assertEqual(stats["recall_success_cnt"], 1)
+        self.assertAlmostEqual(stats["recall_success_reward_sum"], GameConfig.RECALL_SUCCESS_REWARD)
         self.assertEqual(stats["recall_button_rate_when_needed"], 1.0)
+
+    def test_ppo_recall_success_reward_scales_down_when_enemy_tower_is_low(self):
+        manager = GameRewardManager(MAIN_ID)
+        low_hp_lane = make_frame(
+            main=make_hero(MAIN_ID, 1, hp=300, max_hp=1000, x=-10000),
+            enemy=make_hero(ENEMY_ID, 2, hp=0, max_hp=1000, x=10000),
+            npcs=[
+                make_tower(1, x=-15000),
+                make_tower(2, hp=50, x=15000),
+            ],
+        )
+        recovered_backfield = make_frame(
+            main=make_hero(MAIN_ID, 1, hp=760, max_hp=1000, x=-20000),
+            enemy=make_hero(ENEMY_ID, 2, hp=0, max_hp=1000, x=10000),
+            npcs=[
+                make_tower(1, x=-15000),
+                make_tower(2, hp=50, x=15000),
+            ],
+        )
+
+        manager.result(low_hp_lane)
+        manager.set_distance_penalty([GameConfig.RECALL_BUTTON, 0, 0, 0, 0, 0], low_hp_lane)
+        reward = manager.result(recovered_backfield)
+        stats = manager.consume_monitor_stats()
+
+        discounted_success = (
+            GameConfig.RECALL_SUCCESS_REWARD
+            * GameConfig.RECALL_SUCCESS_MIN_TOWER_FACTOR
+        )
+        expected = GameConfig.RECALL_START_REWARD + discounted_success
+        self.assertAlmostEqual(reward["recall_recover"], expected)
+        self.assertAlmostEqual(stats["recall_success_reward_sum"], discounted_success)
+        self.assertLess(reward["recall_recover"], GameConfig.RECALL_START_REWARD + GameConfig.RECALL_SUCCESS_REWARD)
 
     def test_ppo_recall_reward_penalizes_ignoring_or_interrupting_channel(self):
         manager = GameRewardManager(MAIN_ID)

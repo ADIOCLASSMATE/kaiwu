@@ -322,8 +322,11 @@ class Agent(BaseAgent):
         if frame_state is None or legal_action is None:
             return action
 
+        active = getattr(self.reward_manager, "_recall_channel_steps", 0) > 0
         context = self._recall_exploration_context(frame_state)
-        if context is None or not context["should_recall"]:
+        if context is None:
+            return action
+        if not context["should_recall"] and not active:
             return action
 
         adjusted_legal = adjust_raw_legal_action_for_button_targets(np.array(legal_action))
@@ -348,9 +351,8 @@ class Agent(BaseAgent):
             button9_legal = True
             self._action_mask_stats["recall_explore_forced_legal_cnt"] += 1
 
-        active = getattr(self.reward_manager, "_recall_channel_steps", 0) > 0
         if active:
-            return self._maybe_hold_recall_channel(action, legal_actions)
+            return self._hold_recall_channel(action, legal_actions)
 
         if not button9_legal:
             return action
@@ -372,13 +374,14 @@ class Agent(BaseAgent):
             legal_actions[-1],
         )
 
-    def _maybe_hold_recall_channel(self, action, legal_actions):
+    def _hold_recall_channel(self, action, legal_actions):
         if int(action[0]) in (GameConfig.RECALL_BUTTON, GameConfig.RECALL_NOOP_BUTTON):
             return action
         button_mask = legal_actions[0]
         if not self._button_is_legal(button_mask, GameConfig.RECALL_NOOP_BUTTON):
             return action
-        if random.random() >= GameConfig.RECALL_EXPLORATION_HOLD_PROB:
+        hold_prob = getattr(GameConfig, "RECALL_EXPLORATION_HOLD_PROB", 1.0)
+        if hold_prob < 1.0 and random.random() >= hold_prob:
             return action
         self._action_mask_stats["recall_explore_override_cnt"] += 1
         self._action_mask_stats["recall_explore_hold_cnt"] += 1
