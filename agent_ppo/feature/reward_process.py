@@ -1314,6 +1314,9 @@ class GameRewardManager:
         if self._has_minion_pressure_on_enemy_tower(frame_data, main_camp):
             return False
 
+        if self._in_retreat_zone(frame_data, main_hero, main_camp):
+            return True
+
         if enemy_hero is None or enemy_hero.get("hp", 0) <= 0:
             return True
         if not visible_to_camp(enemy_hero, main_camp):

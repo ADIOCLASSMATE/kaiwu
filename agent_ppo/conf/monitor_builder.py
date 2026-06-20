@@ -365,6 +365,7 @@ def build_monitor():
         ("recall_explore_need_cnt", "探索回城需求次数", "1"),
         ("recall_explore_legal_cnt", "探索回城合法次数", "1"),
         ("recall_explore_legal_rate", "探索回城合法占比", "0.0001"),
+        ("recall_explore_forced_legal_cnt", "探索强制放开回城次数", "1"),
         ("recall_explore_override_cnt", "探索覆盖动作次数", "1"),
         ("recall_explore_override_rate", "探索覆盖占比", "0.0001"),
         ("recall_explore_hold_cnt", "探索保持回城次数", "1"),

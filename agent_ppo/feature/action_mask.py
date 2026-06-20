@@ -12,10 +12,11 @@ aligned.  They intentionally only cover high-confidence global constraints.
 
 import numpy as np
 
-from agent_ppo.conf.conf import Config
+from agent_ppo.conf.conf import Config, GameConfig
 
 
 NORMAL_ATTACK_BUTTON = 3
+RECALL_BUTTON = GameConfig.RECALL_BUTTON
 TARGET_NONE = 0
 TARGET_SELF = 2
 ENTITY_TARGETS = (1, 3, 4, 5, 6, 7, 8)
@@ -55,7 +56,7 @@ def adjust_target_legal_for_button(button, target_mask):
 
 
 def adjust_raw_legal_action_for_button_targets(legal_action, return_stats=False):
-    """Adjust a raw 184-dim legal-action mask before action sampling.
+    """Adjust a legal-action mask before action sampling.
 
     For normal attack, target0(None) and target2(Self) are globally invalid. If
     no concrete normal-attack target remains legal, disable button3 itself so
@@ -65,14 +66,25 @@ def adjust_raw_legal_action_for_button_targets(legal_action, return_stats=False)
     stats = _empty_stats()
     raw_target_size = Config.LABEL_SIZE_LIST[-1] * Config.LABEL_SIZE_LIST[0]
     expected_raw = sum(Config.LEGAL_ACTION_SIZE_LIST)
-    if adjusted.reshape(-1).size != expected_raw:
+    expected_compressed = sum(Config.LABEL_SIZE_LIST)
+    flat = adjusted.reshape(-1)
+    if flat.size == expected_compressed:
+        _enable_recall_button(flat)
+        target_offset = sum(Config.LABEL_SIZE_LIST[:-1])
+        if target_offset < flat.size:
+            flat[target_offset + TARGET_NONE] = 1
+        return (adjusted, stats) if return_stats else adjusted
+    if flat.size != expected_raw:
         return (adjusted, stats) if return_stats else adjusted
 
-    flat = adjusted.reshape(-1)
     button_size = Config.LABEL_SIZE_LIST[0]
     target_size = Config.LABEL_SIZE_LIST[-1]
     button_mask = flat[:button_size]
     target_matrix = flat[-raw_target_size:].reshape(button_size, target_size)
+
+    _enable_recall_button(button_mask)
+    if RECALL_BUTTON < button_size:
+        target_matrix[RECALL_BUTTON, TARGET_NONE] = 1
 
     b = NORMAL_ATTACK_BUTTON
     if button_mask[b] > 0:
@@ -94,6 +106,11 @@ def adjust_raw_legal_action_for_button_targets(legal_action, return_stats=False)
             target_matrix[fallback_button, TARGET_NONE] = 1
 
     return (adjusted, stats) if return_stats else adjusted
+
+
+def _enable_recall_button(button_mask):
+    if RECALL_BUTTON < button_mask.size:
+        button_mask[RECALL_BUTTON] = 1
 
 
 def action_mask_stats_rates(stats):

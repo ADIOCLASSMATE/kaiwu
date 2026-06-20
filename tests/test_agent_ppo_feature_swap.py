@@ -254,6 +254,41 @@ class AgentPpoFeatureSwapTests(unittest.TestCase):
         self.assertEqual(stats["button3_no_entity_target_legal_cnt"], 1)
         self.assertEqual(stats["button3_masked_no_entity_target_cnt"], 1)
 
+    def test_ppo_action_mask_keeps_recall_button_available(self):
+        legal_action = torch.ones(sum(Config.LEGAL_ACTION_SIZE_LIST)).numpy()
+        target_size = Config.LABEL_SIZE_LIST[-1]
+        button_size = Config.LABEL_SIZE_LIST[0]
+        legal_action[GameConfig.RECALL_BUTTON] = 0
+        target_matrix = legal_action[-target_size * button_size:].reshape(button_size, target_size)
+        target_matrix[GameConfig.RECALL_BUTTON, :] = 0
+
+        adjusted = adjust_raw_legal_action_for_button_targets(legal_action)
+
+        adjusted_target = adjusted[-target_size * button_size:].reshape(button_size, target_size)
+        self.assertEqual(adjusted[GameConfig.RECALL_BUTTON], 1)
+        self.assertEqual(adjusted_target[GameConfig.RECALL_BUTTON, 0], 1)
+
+    def test_ppo_eval_sampling_can_choose_recall_even_if_raw_mask_blocks_it(self):
+        self._install_base_agent_stub()
+        from agent_ppo.agent import Agent
+
+        agent = Agent.__new__(Agent)
+        agent.label_size_list = Config.LABEL_SIZE_LIST
+        agent.legal_action_size = Config.LEGAL_ACTION_SIZE_LIST
+        logits = torch.zeros(Config.LABEL_SUM).numpy()
+        logits[GameConfig.RECALL_BUTTON] = 10.0
+        legal_action = torch.ones(sum(Config.LEGAL_ACTION_SIZE_LIST)).numpy()
+        target_size = Config.LABEL_SIZE_LIST[-1]
+        button_size = Config.LABEL_SIZE_LIST[0]
+        legal_action[GameConfig.RECALL_BUTTON] = 0
+        target_matrix = legal_action[-target_size * button_size:].reshape(button_size, target_size)
+        target_matrix[GameConfig.RECALL_BUTTON, :] = 0
+
+        _, _, _, d_action = agent._sample_masked_action(logits, legal_action)
+
+        self.assertEqual(d_action[0], GameConfig.RECALL_BUTTON)
+        self.assertEqual(d_action[-1], 0)
+
     def test_ppo_action_quality_monitor_stats_are_reported(self):
         manager = GameRewardManager(MAIN_ID)
         frame = make_frame(
@@ -407,6 +442,7 @@ class AgentPpoFeatureSwapTests(unittest.TestCase):
             "rwd_recall_recover",
             "recall_button_rate_when_needed",
             "recall_explore_button9_prob_avg",
+            "recall_explore_forced_legal_cnt",
         ]:
             self.assertIn(marker, monitor_source)
 
@@ -438,13 +474,59 @@ class AgentPpoFeatureSwapTests(unittest.TestCase):
             GameConfig.RECALL_EXPLORATION_PROB = old_prob
             GameConfig.RECALL_EXPLORATION_MAX_STARTS_PER_EPISODE = old_max
 
-    def test_ppo_recall_exploration_respects_illegal_recall_button(self):
+    def test_ppo_recall_exploration_uses_adjusted_recall_legal_mask(self):
         self._install_base_agent_stub()
         from agent_ppo.agent import Agent
 
         old_prob = GameConfig.RECALL_EXPLORATION_PROB
+        old_force = GameConfig.RECALL_EXPLORATION_FORCE_LEGAL
         try:
             GameConfig.RECALL_EXPLORATION_PROB = 1.0
+            GameConfig.RECALL_EXPLORATION_FORCE_LEGAL = True
+            agent = self._recall_explore_agent()
+            observation = self._recall_explore_observation()
+            observation["legal_action"][GameConfig.RECALL_BUTTON] = 0.0
+            target_size = Config.LABEL_SIZE_LIST[-1]
+            button_size = Config.LABEL_SIZE_LIST[0]
+            target_matrix = observation["legal_action"][-target_size * button_size:].reshape(
+                button_size,
+                target_size,
+            )
+            target_matrix[GameConfig.RECALL_BUTTON, :] = 0.0
+            act_data = SimpleNamespace(
+                action=[2, 0, 0, 0, 0, 0],
+                prob=[[0.0] * Config.LABEL_SUM],
+            )
+
+            action = agent.action_process(observation, act_data, True)
+            stats = agent.consume_action_mask_stats()
+
+            self.assertEqual(action[0], GameConfig.RECALL_BUTTON)
+            self.assertEqual(observation["legal_action"][GameConfig.RECALL_BUTTON], 1.0)
+            self.assertEqual(
+                observation["legal_action"][-target_size * button_size:].reshape(
+                    button_size,
+                    target_size,
+                )[GameConfig.RECALL_BUTTON, 0],
+                1.0,
+            )
+            self.assertEqual(stats["recall_explore_need_cnt"], 1)
+            self.assertEqual(stats["recall_explore_legal_cnt"], 1)
+            self.assertEqual(stats["recall_explore_forced_legal_cnt"], 0)
+            self.assertEqual(stats["recall_explore_override_cnt"], 1)
+        finally:
+            GameConfig.RECALL_EXPLORATION_PROB = old_prob
+            GameConfig.RECALL_EXPLORATION_FORCE_LEGAL = old_force
+
+    def test_ppo_recall_exploration_ignores_force_toggle_after_mask_adjustment(self):
+        self._install_base_agent_stub()
+        from agent_ppo.agent import Agent
+
+        old_prob = GameConfig.RECALL_EXPLORATION_PROB
+        old_force = GameConfig.RECALL_EXPLORATION_FORCE_LEGAL
+        try:
+            GameConfig.RECALL_EXPLORATION_PROB = 1.0
+            GameConfig.RECALL_EXPLORATION_FORCE_LEGAL = False
             agent = self._recall_explore_agent()
             observation = self._recall_explore_observation()
             observation["legal_action"][GameConfig.RECALL_BUTTON] = 0.0
@@ -456,12 +538,12 @@ class AgentPpoFeatureSwapTests(unittest.TestCase):
             action = agent.action_process(observation, act_data, True)
             stats = agent.consume_action_mask_stats()
 
-            self.assertEqual(action[0], 2)
-            self.assertEqual(stats["recall_explore_need_cnt"], 1)
-            self.assertEqual(stats["recall_explore_legal_cnt"], 0)
-            self.assertEqual(stats["recall_explore_override_cnt"], 0)
+            self.assertEqual(action[0], GameConfig.RECALL_BUTTON)
+            self.assertEqual(stats["recall_explore_forced_legal_cnt"], 0)
+            self.assertEqual(stats["recall_explore_override_cnt"], 1)
         finally:
             GameConfig.RECALL_EXPLORATION_PROB = old_prob
+            GameConfig.RECALL_EXPLORATION_FORCE_LEGAL = old_force
 
     def test_ppo_recall_exploration_holds_active_channel_with_noop(self):
         self._install_base_agent_stub()
@@ -561,6 +643,29 @@ class AgentPpoFeatureSwapTests(unittest.TestCase):
         self.assertEqual(stats["recall_need_cnt"], 3)
         self.assertEqual(stats["recall_miss_cnt"], 1)
         self.assertEqual(stats["recall_interrupt_cnt"], 1)
+
+    def test_ppo_recall_need_allows_low_hp_behind_own_tower(self):
+        manager = GameRewardManager(MAIN_ID)
+        low_hp_behind_tower = make_frame(
+            main=make_hero(MAIN_ID, 1, hp=300, max_hp=1000, x=-20000),
+            enemy=make_hero(ENEMY_ID, 2, hp=1000, max_hp=1000, attack_range=5000, x=-12000),
+            npcs=[
+                make_tower(1, x=-15000),
+                make_tower(2, x=15000),
+            ],
+        )
+
+        manager.result(low_hp_behind_tower)
+        manager.set_distance_penalty(
+            [GameConfig.RECALL_BUTTON, 0, 0, 0, 0, 0],
+            low_hp_behind_tower,
+        )
+        reward = manager.result(low_hp_behind_tower)
+        stats = manager.consume_monitor_stats()
+
+        self.assertAlmostEqual(reward["recall_recover"], GameConfig.RECALL_START_REWARD)
+        self.assertEqual(stats["recall_need_cnt"], 1)
+        self.assertEqual(stats["recall_start_cnt"], 1)
 
     def test_ppo_recall_reward_does_not_compete_with_safe_tower_push(self):
         manager = GameRewardManager(MAIN_ID)

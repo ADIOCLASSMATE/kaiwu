@@ -307,6 +307,7 @@ class Agent(BaseAgent):
                 "recall_explore_legal_cnt": 0,
                 "recall_explore_override_cnt": 0,
                 "recall_explore_hold_cnt": 0,
+                "recall_explore_forced_legal_cnt": 0,
                 "recall_explore_button9_prob_sum": 0.0,
             }
         )
@@ -326,10 +327,8 @@ class Agent(BaseAgent):
             return action
 
         adjusted_legal = adjust_raw_legal_action_for_button_targets(np.array(legal_action))
-        legal_actions = np.split(
-            adjusted_legal,
-            [sum(self.label_size_list[: index + 1]) for index in range(len(self.label_size_list) - 1)],
-        )
+        observation["legal_action"] = adjusted_legal
+        legal_actions = self._split_legal_action(adjusted_legal)
         button_mask = legal_actions[0]
         button9_legal = self._button_is_legal(button_mask, GameConfig.RECALL_BUTTON)
         button9_prob = self._action_prob(act_data, GameConfig.RECALL_BUTTON)
@@ -338,6 +337,16 @@ class Agent(BaseAgent):
         self._action_mask_stats["recall_explore_button9_prob_sum"] += button9_prob
         if button9_legal:
             self._action_mask_stats["recall_explore_legal_cnt"] += 1
+        elif GameConfig.RECALL_EXPLORATION_FORCE_LEGAL:
+            adjusted_legal = self._enable_button_target(
+                adjusted_legal,
+                GameConfig.RECALL_BUTTON,
+                0,
+            )
+            observation["legal_action"] = adjusted_legal
+            legal_actions = self._split_legal_action(adjusted_legal)
+            button9_legal = True
+            self._action_mask_stats["recall_explore_forced_legal_cnt"] += 1
 
         active = getattr(self.reward_manager, "_recall_channel_steps", 0) > 0
         if active:
@@ -379,6 +388,12 @@ class Agent(BaseAgent):
             legal_actions[-1],
         )
 
+    def _split_legal_action(self, legal_action):
+        return np.split(
+            legal_action,
+            [sum(self.label_size_list[: index + 1]) for index in range(len(self.label_size_list) - 1)],
+        )
+
     def _recall_exploration_context(self, frame_state):
         try:
             main_hero = self.reward_manager._main_hero(frame_state)
@@ -406,16 +421,39 @@ class Agent(BaseAgent):
         return replaced
 
     def _preferred_target_for_button(self, button, target_legal_action):
-        target_matrix = np.asarray(target_legal_action).reshape(
-            self.legal_action_size[0],
-            self.legal_action_size[-1] // self.legal_action_size[0],
-        )
-        target_mask = adjust_target_legal_for_button(button, target_matrix[int(button)])
+        flat = np.asarray(target_legal_action).reshape(-1)
+        target_size = self.label_size_list[-1]
+        button_size = self.label_size_list[0]
+        if flat.size == target_size * button_size:
+            target_matrix = flat.reshape(button_size, target_size)
+            target_mask = adjust_target_legal_for_button(button, target_matrix[int(button)])
+        else:
+            target_mask = adjust_target_legal_for_button(button, flat)
         flat = np.asarray(target_mask).reshape(-1)
         if flat.size > 0 and flat[0] > 0:
             return 0
         legal = np.flatnonzero(flat > 0)
         return int(legal[0]) if legal.size > 0 else 0
+
+    def _enable_button_target(self, legal_action, button, target):
+        flat = np.asarray(legal_action).copy().reshape(-1)
+        button = int(button)
+        target = int(target)
+        if button < flat.size:
+            flat[button] = 1.0
+
+        target_size = self.label_size_list[-1]
+        button_size = self.label_size_list[0]
+        raw_target_size = target_size * button_size
+        if flat.size >= raw_target_size + button_size:
+            target_matrix = flat[-raw_target_size:].reshape(button_size, target_size)
+            if 0 <= button < button_size and 0 <= target < target_size:
+                target_matrix[button, target] = 1.0
+        elif flat.size >= sum(self.label_size_list):
+            target_offset = sum(self.label_size_list[:-1])
+            if 0 <= target < target_size:
+                flat[target_offset + target] = 1.0
+        return flat.reshape(np.asarray(legal_action).shape)
 
     @staticmethod
     def _button_is_legal(button_mask, button):
