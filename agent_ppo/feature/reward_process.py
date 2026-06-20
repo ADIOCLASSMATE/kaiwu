@@ -14,6 +14,7 @@ Author: Tencent AI Arena Authors
   lane_progress（安全时从泉水/后场到己方神符的前进势能差分）、
   lane_presence（安全前场/兵线存在感；满血后场无产出小惩罚）、
   retreat_recover（危险局面下合理回撤/回血的小奖励）、
+  recall_recover（脱战低血时开始/保持回城，回城中乱按动作给小惩罚）、
   danger_penalty（低血仍处在敌方威胁区）、
   death（自身死亡增量）、
   minion_hp_point（可见敌方英雄攻击己方小兵造成的掉血惩罚）、
@@ -113,8 +114,11 @@ class GameRewardManager:
         self._lane_progress_sum = 0.0
         self._lane_presence_sum = 0.0
         self._retreat_recover_sum = 0.0
+        self._recall_recover_sum = 0.0
         self._last_hit_focus_sum = 0.0
         self._retreat_need_memory = 0
+        self._recall_channel_steps = 0
+        self._recall_action_event = 0.0
         self._last_hp_ratio = None
         self._last_hit_focus_event = 0.0
         self._action_button_counts = [0] * 12
@@ -156,6 +160,13 @@ class GameRewardManager:
             "minion": 0,
             "monster": 0,
         }
+        self._recall_need_cnt = 0
+        self._recall_start_cnt = 0
+        self._recall_hold_cnt = 0
+        self._recall_miss_cnt = 0
+        self._recall_interrupt_cnt = 0
+        self._recall_success_cnt = 0
+        self._recall_unneeded_cnt = 0
 
     def result(self, frame_data):
         self.frame_data_process(frame_data)
@@ -240,6 +251,10 @@ class GameRewardManager:
             action,
             decided_frame_state,
         )
+        self._recall_action_event = self.recall_recover_action_reward(
+            action,
+            decided_frame_state,
+        )
 
     def _action_choice_penalty(self, action, decided_frame_state):
         if action is None or len(action) < 6:
@@ -302,6 +317,93 @@ class GameRewardManager:
 
     def _safe_tower_attack_available(self, decided_frame_state):
         return self.tower_attack_reward([3, 0, 0, 0, 0, 7], decided_frame_state) > 0
+
+    def recall_recover_action_reward(self, action, decided_frame_state):
+        """Action-level shaping for low-hp disengaged recall channel."""
+        if action is None or len(action) < 1:
+            return 0.0
+        try:
+            button = int(action[0])
+        except (TypeError, ValueError):
+            return 0.0
+
+        main_hero = self._main_hero(decided_frame_state)
+        if main_hero is None:
+            self._recall_channel_steps = 0
+            return 0.0
+        main_camp = main_hero.get("camp")
+        if main_camp not in (1, 2):
+            self._recall_channel_steps = 0
+            return 0.0
+        enemy_camp = 2 if main_camp == 1 else 1
+        main_hero, main_tower = self._get_camp_units(decided_frame_state, main_camp)
+        enemy_hero, enemy_tower = self._get_camp_units(decided_frame_state, enemy_camp)
+        should_recall = self.should_recall_recover(
+            decided_frame_state,
+            main_camp,
+            main_hero,
+            main_tower,
+            enemy_hero,
+            enemy_tower,
+        )
+        if should_recall:
+            self._recall_need_cnt += 1
+
+        active = self._recall_channel_steps > 0
+        value = 0.0
+        if active and button not in (
+            GameConfig.RECALL_BUTTON,
+            GameConfig.RECALL_NOOP_BUTTON,
+        ):
+            self._recall_interrupt_cnt += 1
+            self._recall_channel_steps = 0
+            return -GameConfig.RECALL_INTERRUPT_PENALTY
+
+        if should_recall and button == GameConfig.RECALL_BUTTON:
+            if active:
+                self._recall_hold_cnt += 1
+                value += GameConfig.RECALL_HOLD_REWARD
+            else:
+                self._recall_start_cnt += 1
+                value += GameConfig.RECALL_START_REWARD
+            self._recall_channel_steps = GameConfig.RECALL_MEMORY_STEPS
+            return value
+
+        if should_recall and active and button == GameConfig.RECALL_NOOP_BUTTON:
+            self._recall_hold_cnt += 1
+            self._recall_channel_steps = max(1, self._recall_channel_steps - 1)
+            return GameConfig.RECALL_HOLD_REWARD
+
+        if should_recall:
+            if self._recall_miss_should_penalize(
+                button,
+                decided_frame_state,
+                main_hero,
+                main_camp,
+            ):
+                self._recall_miss_cnt += 1
+                return -GameConfig.RECALL_MISS_PENALTY
+            return 0.0
+
+        if button == GameConfig.RECALL_BUTTON:
+            self._recall_unneeded_cnt += 1
+            return -GameConfig.RECALL_UNNEEDED_PENALTY
+
+        if active:
+            self._recall_channel_steps = max(0, self._recall_channel_steps - 1)
+        return 0.0
+
+    def _recall_miss_should_penalize(self, button, frame_data, main_hero, main_camp):
+        if button == GameConfig.RECALL_NOOP_BUTTON:
+            return True
+        if (
+            button in GameConfig.ATTACK_BUTTONS
+            and not self._safe_tower_attack_available(frame_data)
+        ):
+            return True
+        if button == 2 and not self._in_retreat_zone(frame_data, main_hero, main_camp):
+            return False
+        return button != 2
 
     def _record_action_stats(self, action, decided_frame_state):
         if action is None or len(action) < 6:
@@ -518,6 +620,18 @@ class GameRewardManager:
                 self._frontline_presence_cnt / frame_cnt if frame_cnt > 0 else 0.0,
                 4,
             ),
+            "recall_need_cnt": self._recall_need_cnt,
+            "recall_start_cnt": self._recall_start_cnt,
+            "recall_hold_cnt": self._recall_hold_cnt,
+            "recall_miss_cnt": self._recall_miss_cnt,
+            "recall_interrupt_cnt": self._recall_interrupt_cnt,
+            "recall_success_cnt": self._recall_success_cnt,
+            "recall_unneeded_cnt": self._recall_unneeded_cnt,
+            "recall_button_rate_when_needed": round(
+                (self._recall_start_cnt + self._recall_hold_cnt) / self._recall_need_cnt
+                if self._recall_need_cnt > 0 else 0.0,
+                4,
+            ),
         }
         for idx, value in enumerate(self._action_button_counts):
             stats[f"action_button_{idx}"] = value
@@ -618,6 +732,13 @@ class GameRewardManager:
             "minion": 0,
             "monster": 0,
         }
+        self._recall_need_cnt = 0
+        self._recall_start_cnt = 0
+        self._recall_hold_cnt = 0
+        self._recall_miss_cnt = 0
+        self._recall_interrupt_cnt = 0
+        self._recall_success_cnt = 0
+        self._recall_unneeded_cnt = 0
         return stats
 
     # ---- distance shaping 辅助：定位主英雄 / 敌英雄 / 第 k 近敌方小兵 / 最近野怪 ----
@@ -879,6 +1000,18 @@ class GameRewardManager:
                     enemy_hero,
                     enemy_tower,
                 )
+            elif reward_name == "recall_recover":
+                main_hero, main_tower = self._get_camp_units(frame_data, camp)
+                enemy_camp = 2 if camp == 1 else 1
+                enemy_hero, enemy_tower = self._get_camp_units(frame_data, enemy_camp)
+                rs.cur_frame_value = self.calculate_recall_recover_state(
+                    frame_data,
+                    camp,
+                    main_hero,
+                    main_tower,
+                    enemy_hero,
+                    enemy_tower,
+                )
             elif reward_name == "hp_point":
                 rs.cur_frame_value = self._hero_damage_to_hero(hero)
             elif reward_name == "danger_penalty":
@@ -1102,6 +1235,100 @@ class GameRewardManager:
             "retreat_need": retreat_need,
             "in_retreat_zone": self._in_retreat_zone(frame_data, main_hero, camp),
         }
+
+    def calculate_recall_recover_state(
+        self,
+        frame_data,
+        camp,
+        main_hero,
+        main_tower,
+        enemy_hero,
+        enemy_tower,
+    ):
+        if main_hero is None:
+            return {
+                "hp_ratio": 0.0,
+                "in_retreat_zone": False,
+                "should_recall": False,
+            }
+        return {
+            "hp_ratio": self._raw_hp_ratio(main_hero),
+            "in_retreat_zone": self._in_retreat_zone(frame_data, main_hero, camp),
+            "should_recall": self.should_recall_recover(
+                frame_data,
+                camp,
+                main_hero,
+                main_tower,
+                enemy_hero,
+                enemy_tower,
+            ),
+        }
+
+    def should_recall_recover(
+        self,
+        frame_data,
+        main_camp,
+        main_hero,
+        main_tower,
+        enemy_hero,
+        enemy_tower,
+    ):
+        if (
+            main_hero is None
+            or main_tower is None
+            or enemy_tower is None
+            or self._is_sentinel(main_hero.get("location", {}))
+        ):
+            return False
+
+        hp_ratio = self._raw_hp_ratio(main_hero)
+        threshold = (
+            GameConfig.RECALL_TARGET_HP
+            if self._recall_channel_steps > 0
+            else GameConfig.RECALL_LOW_HP_THRESHOLD
+        )
+        if hp_ratio >= threshold:
+            return False
+
+        main_pos = (
+            main_hero["location"]["x"],
+            main_hero["location"]["z"],
+        )
+        if (
+            enemy_tower is not None
+            and enemy_tower.get("hp", 0) > 0
+            and not self._is_sentinel(enemy_tower.get("location", {}))
+        ):
+            tower_pos = (
+                enemy_tower["location"]["x"],
+                enemy_tower["location"]["z"],
+            )
+            tower_range = float(enemy_tower.get("attack_range", 0) or 0)
+            in_tower_range = (
+                tower_range > 0
+                and math.dist(main_pos, tower_pos) <= tower_range
+            )
+            if in_tower_range:
+                return False
+
+        if self._has_minion_pressure_on_enemy_tower(frame_data, main_camp):
+            return False
+
+        if enemy_hero is None or enemy_hero.get("hp", 0) <= 0:
+            return True
+        if not visible_to_camp(enemy_hero, main_camp):
+            return True
+        loc = enemy_hero.get("location", {})
+        if self._is_sentinel(loc):
+            return True
+
+        enemy_pos = (loc["x"], loc["z"])
+        enemy_range = float(enemy_hero.get("attack_range", 0) or 0)
+        far_range = max(
+            GameConfig.RECALL_ENEMY_FAR_RANGE,
+            enemy_range * GameConfig.RECALL_ENEMY_RANGE_MULT,
+        )
+        return math.dist(main_pos, enemy_pos) > far_range
 
     def calculate_retreat_need(
         self,
@@ -1563,6 +1790,11 @@ class GameRewardManager:
                     main.last_frame_value,
                     main.cur_frame_value,
                 )
+            elif reward_name == "recall_recover":
+                rs.value = self._recall_recover_delta(
+                    main.last_frame_value,
+                    main.cur_frame_value,
+                )
             elif reward_name == "danger_penalty":
                 rs.value = main.cur_frame_value
             elif reward_name == "death":
@@ -1606,6 +1838,7 @@ class GameRewardManager:
         self._distance_penalty = 0.0
         self._tower_attack_event = 0.0
         self._last_hit_focus_event = 0.0
+        self._recall_action_event = 0.0
         reward_dict["reward_sum"] = reward_sum
         self._reward_frame_cnt += 1
         if reward_dict.get("idle_penalty", 0.0) > 0:
@@ -1658,6 +1891,40 @@ class GameRewardManager:
             "_retreat_recover_sum",
             0.0,
             GameConfig.RETREAT_RECOVER_MAX_PER_EPISODE,
+        )
+
+    def _recall_recover_delta(self, previous, current):
+        value = self._recall_action_event
+        if not isinstance(previous, dict) or not isinstance(current, dict):
+            return self._bounded_recall_value(value)
+
+        if self._recall_channel_steps > 0:
+            last_hp = float(previous.get("hp_ratio", 0.0) or 0.0)
+            cur_hp = float(current.get("hp_ratio", 0.0) or 0.0)
+            hp_delta = cur_hp - last_hp
+            recovered_enough = (
+                current.get("in_retreat_zone")
+                and hp_delta >= GameConfig.RECALL_SUCCESS_HP_DELTA
+            )
+            reached_target = (
+                current.get("in_retreat_zone")
+                and last_hp < GameConfig.RECALL_TARGET_HP <= cur_hp
+            )
+            if recovered_enough or reached_target:
+                value += GameConfig.RECALL_SUCCESS_REWARD
+                self._recall_success_cnt += 1
+                self._recall_channel_steps = 0
+            elif not current.get("should_recall") and cur_hp >= GameConfig.RECALL_TARGET_HP:
+                self._recall_channel_steps = 0
+
+        return self._bounded_recall_value(value)
+
+    def _bounded_recall_value(self, value):
+        return self._consume_bounded_episode_budget(
+            value,
+            "_recall_recover_sum",
+            GameConfig.RECALL_RECOVER_MIN_PER_EPISODE,
+            GameConfig.RECALL_RECOVER_MAX_PER_EPISODE,
         )
 
     def apply_terminal_outcome(self, reward_dict, frame_data, win=None):

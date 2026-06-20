@@ -69,6 +69,7 @@ class GameConfig:
         "lane_progress": 2.0,       # 安全时泉水到己方神符的前进势能差分，小上限探索引导
         "lane_presence": 1.0,       # 安全前场/兵线存在感；满血后场无产出小惩罚
         "retreat_recover": 1.0,     # 危险局面下合理回撤/回血的小奖励，有整局上限
+        "recall_recover": 1.0,      # 脱战低血时开始/保持回城，成功恢复给小奖励
         "hp_point": 4.0,            # 英雄对英雄伤害优势变化，只奖励自己打出的压制
         "danger_penalty": -1.0,     # 低血仍在敌英雄/敌塔威胁区的逐帧惩罚
         "kill": 4.0,                # 击杀数优势变化；不再与 death 重复计数
@@ -145,6 +146,26 @@ class GameConfig:
     RETREAT_NEED_MEMORY_FRAMES = 300
     RETREAT_LOW_HP_THRESHOLD = 0.50
     RETREAT_ENEMY_HP_ADVANTAGE = 0.25
+
+    # ---- 脱战低血回城 ----
+    # 回城是多步 channel 行为，单靠“成功回泉水”很难 rollout 到；因此奖励拆成
+    # 开始、保持、打断、恢复成功四段。总量仍小于击杀/推塔收益，只解决低血空挂。
+    RECALL_BUTTON = 9
+    RECALL_NOOP_BUTTON = 1
+    RECALL_LOW_HP_THRESHOLD = 0.45
+    RECALL_TARGET_HP = 0.70
+    RECALL_ENEMY_FAR_RANGE = 9000.0
+    RECALL_ENEMY_RANGE_MULT = 1.8
+    RECALL_MEMORY_STEPS = 80
+    RECALL_START_REWARD = 0.06
+    RECALL_HOLD_REWARD = 0.008
+    RECALL_MISS_PENALTY = 0.006
+    RECALL_UNNEEDED_PENALTY = 0.01
+    RECALL_INTERRUPT_PENALTY = 0.08
+    RECALL_SUCCESS_REWARD = 0.40
+    RECALL_SUCCESS_HP_DELTA = 0.04
+    RECALL_RECOVER_MAX_PER_EPISODE = 1.5
+    RECALL_RECOVER_MIN_PER_EPISODE = -1.0
 
     # ---- 补刀窗口动作 shaping ----
     LAST_HIT_FOCUS_HP_RATIO = 0.25

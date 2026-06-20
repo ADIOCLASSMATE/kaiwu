@@ -364,8 +364,85 @@ class AgentPpoFeatureSwapTests(unittest.TestCase):
             "action_penalty_sum",
             "noop_opportunity_penalty_sum",
             "invalid_target_penalty_sum",
+            "rwd_recall_recover",
+            "recall_button_rate_when_needed",
         ]:
             self.assertIn(marker, monitor_source)
+
+    def test_ppo_recall_reward_encourages_start_and_successful_recovery(self):
+        manager = GameRewardManager(MAIN_ID)
+        low_hp_lane = make_frame(
+            main=make_hero(MAIN_ID, 1, hp=300, max_hp=1000, x=-10000),
+            enemy=make_hero(ENEMY_ID, 2, hp=0, max_hp=1000, x=10000),
+        )
+        recovered_backfield = make_frame(
+            main=make_hero(MAIN_ID, 1, hp=760, max_hp=1000, x=-20000),
+            enemy=make_hero(ENEMY_ID, 2, hp=0, max_hp=1000, x=10000),
+        )
+
+        manager.result(low_hp_lane)
+        manager.set_distance_penalty([GameConfig.RECALL_BUTTON, 0, 0, 0, 0, 0], low_hp_lane)
+        reward = manager.result(recovered_backfield)
+        stats = manager.consume_monitor_stats()
+
+        expected = GameConfig.RECALL_START_REWARD + GameConfig.RECALL_SUCCESS_REWARD
+        self.assertAlmostEqual(reward["recall_recover"], expected)
+        self.assertGreater(reward["recall_recover"], GameConfig.RECALL_INTERRUPT_PENALTY)
+        self.assertLess(reward["recall_recover"], GameConfig.REWARD_WEIGHT_DICT["kill"])
+        self.assertEqual(stats["recall_need_cnt"], 1)
+        self.assertEqual(stats["recall_start_cnt"], 1)
+        self.assertEqual(stats["recall_success_cnt"], 1)
+        self.assertEqual(stats["recall_button_rate_when_needed"], 1.0)
+
+    def test_ppo_recall_reward_penalizes_ignoring_or_interrupting_channel(self):
+        manager = GameRewardManager(MAIN_ID)
+        low_hp_lane = make_frame(
+            main=make_hero(MAIN_ID, 1, hp=300, max_hp=1000, x=-10000),
+            enemy=make_hero(ENEMY_ID, 2, hp=0, max_hp=1000, x=10000),
+        )
+
+        manager.result(low_hp_lane)
+        manager.set_distance_penalty([GameConfig.RECALL_NOOP_BUTTON, 0, 0, 0, 0, 0], low_hp_lane)
+        miss_reward = manager.result(low_hp_lane)
+
+        manager.set_distance_penalty([GameConfig.RECALL_BUTTON, 0, 0, 0, 0, 0], low_hp_lane)
+        start_reward = manager.result(low_hp_lane)
+
+        manager.set_distance_penalty([3, 0, 0, 0, 0, 1], low_hp_lane)
+        interrupt_reward = manager.result(low_hp_lane)
+        stats = manager.consume_monitor_stats()
+
+        self.assertAlmostEqual(miss_reward["recall_recover"], -GameConfig.RECALL_MISS_PENALTY)
+        self.assertAlmostEqual(start_reward["recall_recover"], GameConfig.RECALL_START_REWARD)
+        self.assertAlmostEqual(
+            interrupt_reward["recall_recover"],
+            -GameConfig.RECALL_INTERRUPT_PENALTY,
+        )
+        self.assertLess(interrupt_reward["recall_recover"], miss_reward["recall_recover"])
+        self.assertEqual(stats["recall_need_cnt"], 3)
+        self.assertEqual(stats["recall_miss_cnt"], 1)
+        self.assertEqual(stats["recall_interrupt_cnt"], 1)
+
+    def test_ppo_recall_reward_does_not_compete_with_safe_tower_push(self):
+        manager = GameRewardManager(MAIN_ID)
+        low_hp_with_wave = make_frame(
+            main=make_hero(MAIN_ID, 1, hp=300, max_hp=1000, attack_range=2000, x=14000),
+            enemy=make_hero(ENEMY_ID, 2, hp=0, max_hp=1000, x=10000),
+            npcs=[
+                make_tower(1, x=-15000),
+                make_tower(2, x=15000),
+                make_minion(401, 1, hp=1000, x=14800),
+            ],
+        )
+
+        manager.result(low_hp_with_wave)
+        manager.set_distance_penalty([GameConfig.RECALL_BUTTON, 0, 0, 0, 0, 0], low_hp_with_wave)
+        reward = manager.result(low_hp_with_wave)
+        stats = manager.consume_monitor_stats()
+
+        self.assertAlmostEqual(reward["recall_recover"], -GameConfig.RECALL_UNNEEDED_PENALTY)
+        self.assertEqual(stats["recall_need_cnt"], 0)
+        self.assertEqual(stats["recall_unneeded_cnt"], 1)
 
 
 if __name__ == "__main__":

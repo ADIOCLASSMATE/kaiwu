@@ -139,6 +139,7 @@ def build_monitor():
         ("rwd_lane_progress", "安全上线引导"),
         ("rwd_lane_presence", "安全前场存在"),
         ("rwd_retreat_recover", "危险回撤回血"),
+        ("rwd_recall_recover", "脱战低血回城"),
         ("rwd_hp_point", "英雄伤害优势"),
         ("rwd_danger_penalty", "低血危险惩罚"),
         ("rwd_kill", "击杀"),
@@ -344,6 +345,26 @@ def build_monitor():
     ]
     builder = builder.add_group(group_name="No-op场景", group_name_en="noop_context")
     for en, cn, prec in noop_items:
+        builder = (
+            builder.add_panel(name=cn, name_en=en, type="line", unit="")
+            .add_metric(metrics_name=en, expr="round(avg(%s{}), %s)" % (en, prec))
+            .end_panel()
+        )
+    builder = builder.end_group()
+
+    # ---- 回城 channel 健康度 ----
+    recall_items = [
+        ("recall_need_cnt", "回城需求次数", "1"),
+        ("recall_start_cnt", "开始回城次数", "1"),
+        ("recall_hold_cnt", "保持回城次数", "1"),
+        ("recall_miss_cnt", "该回城未回次数", "1"),
+        ("recall_interrupt_cnt", "回城打断次数", "1"),
+        ("recall_success_cnt", "回城恢复成功次数", "1"),
+        ("recall_unneeded_cnt", "不需回城误按次数", "1"),
+        ("recall_button_rate_when_needed", "需求时回城按钮占比", "0.0001"),
+    ]
+    builder = builder.add_group(group_name="回城检测", group_name_en="recall_health")
+    for en, cn, prec in recall_items:
         builder = (
             builder.add_panel(name=cn, name_en=en, type="line", unit="")
             .add_metric(metrics_name=en, expr="round(avg(%s{}), %s)" % (en, prec))
