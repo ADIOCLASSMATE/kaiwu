@@ -1,4 +1,4 @@
-from script.pull_training_data import build_summary
+from script.pull_training_data import build_summary, default_monitor_paths
 
 
 def test_build_summary_keeps_future_metrics_in_misc_group():
@@ -21,3 +21,11 @@ def test_build_summary_keeps_future_metrics_in_misc_group():
     assert summary["latest"]["misc_metrics"]["future_metric_v2"] == 0.75
     assert summary["latest"]["misc_metrics"]["future_zero_metric"] == 0.0
     assert "future_no_data_metric" not in summary["latest"]["misc_metrics"]
+
+
+def test_default_monitor_paths_only_use_ppo_monitor():
+    paths = default_monitor_paths()
+
+    assert len(paths) == 1
+    assert paths[0].as_posix().endswith("agent_ppo/conf/monitor_builder.py")
+    assert "agent_diy" not in paths[0].as_posix()

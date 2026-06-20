@@ -299,9 +299,8 @@ def parse_monitor_metrics(monitor_path: Path) -> dict[str, str]:
 
 
 def default_monitor_paths() -> list[Path]:
-    """Return monitor builders shipped in this repo."""
+    """Return monitor builders for the PPO agent only."""
     return [
-        ROOT / "agent_diy/conf/monitor_builder.py",
         ROOT / "agent_ppo/conf/monitor_builder.py",
     ]
 
@@ -794,7 +793,7 @@ Examples:
     parser.add_argument("--no-standard", action="store_true",
                         help="Skip 37 standard platform metrics (pull only custom)")
     parser.add_argument("--monitor-path", default="",
-                        help="Path to monitor_builder.py (default: agent_diy/conf/monitor_builder.py)")
+                        help="Path to monitor_builder.py (default: agent_ppo/conf/monitor_builder.py)")
 
     # output
     parser.add_argument("-o", "--output", default="", help="Output directory (default: data/<task_name>)")
