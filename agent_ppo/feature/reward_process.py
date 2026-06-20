@@ -165,6 +165,7 @@ class GameRewardManager:
         self._recall_hold_cnt = 0
         self._recall_miss_cnt = 0
         self._recall_interrupt_cnt = 0
+        self._recall_interrupt_penalty_sum = 0.0
         self._recall_success_cnt = 0
         self._recall_success_reward_sum = 0.0
         self._recall_unneeded_cnt = 0
@@ -358,7 +359,9 @@ class GameRewardManager:
         ):
             self._recall_interrupt_cnt += 1
             self._recall_channel_steps = 0
-            return -GameConfig.RECALL_INTERRUPT_PENALTY
+            penalty = -GameConfig.RECALL_INTERRUPT_PENALTY
+            self._recall_interrupt_penalty_sum += penalty
+            return penalty
 
         if should_recall and button == GameConfig.RECALL_BUTTON:
             if active:
@@ -395,16 +398,7 @@ class GameRewardManager:
         return 0.0
 
     def _recall_miss_should_penalize(self, button, frame_data, main_hero, main_camp):
-        if button == GameConfig.RECALL_NOOP_BUTTON:
-            return True
-        if (
-            button in GameConfig.ATTACK_BUTTONS
-            and not self._safe_tower_attack_available(frame_data)
-        ):
-            return True
-        if button == 2 and not self._in_retreat_zone(frame_data, main_hero, main_camp):
-            return False
-        return button != 2
+        return button != GameConfig.RECALL_BUTTON
 
     def _record_action_stats(self, action, decided_frame_state):
         if action is None or len(action) < 6:
@@ -626,6 +620,7 @@ class GameRewardManager:
             "recall_hold_cnt": self._recall_hold_cnt,
             "recall_miss_cnt": self._recall_miss_cnt,
             "recall_interrupt_cnt": self._recall_interrupt_cnt,
+            "recall_interrupt_penalty_sum": round(self._recall_interrupt_penalty_sum, 3),
             "recall_success_cnt": self._recall_success_cnt,
             "recall_success_reward_sum": round(self._recall_success_reward_sum, 3),
             "recall_unneeded_cnt": self._recall_unneeded_cnt,
@@ -739,6 +734,7 @@ class GameRewardManager:
         self._recall_hold_cnt = 0
         self._recall_miss_cnt = 0
         self._recall_interrupt_cnt = 0
+        self._recall_interrupt_penalty_sum = 0.0
         self._recall_success_cnt = 0
         self._recall_success_reward_sum = 0.0
         self._recall_unneeded_cnt = 0
@@ -1223,6 +1219,7 @@ class GameRewardManager:
                 "lane_t": None,
                 "retreat_need": 0.0,
                 "in_retreat_zone": False,
+                "should_recall": False,
             }
         lane_t = self._hero_lane_t(main_hero, main_tower, enemy_tower)
         retreat_need = self.calculate_retreat_need(
@@ -1237,6 +1234,14 @@ class GameRewardManager:
             "lane_t": lane_t,
             "retreat_need": retreat_need,
             "in_retreat_zone": self._in_retreat_zone(frame_data, main_hero, camp),
+            "should_recall": self.should_recall_recover(
+                frame_data,
+                camp,
+                main_hero,
+                main_tower,
+                enemy_hero,
+                enemy_tower,
+            ),
         }
 
     def calculate_recall_recover_state(
@@ -1770,8 +1775,12 @@ class GameRewardManager:
                     rs.value *= GameConfig.TOWER_DIVE_DISCOUNT
             elif reward_name == "lane_progress":
                 cur_potential, cur_active = main.cur_frame_value
-                last_potential, _ = main.last_frame_value
-                raw_delta = cur_potential - last_potential if cur_active else 0.0
+                last_potential, last_active = main.last_frame_value
+                raw_delta = (
+                    cur_potential - last_potential
+                    if cur_active and last_active
+                    else 0.0
+                )
                 rs.value = self._consume_bounded_episode_budget(
                     raw_delta,
                     "_lane_progress_sum",
@@ -1864,28 +1873,44 @@ class GameRewardManager:
             return 0.0
 
         had_recent_need = self._retreat_need_memory > 0
+        previous_retreat_need = float(previous.get("retreat_need", 0.0) or 0.0)
         retreat_need = float(current.get("retreat_need", 0.0) or 0.0)
-        if retreat_need > 0:
+        movement_need = max(previous_retreat_need, retreat_need)
+        if movement_need > 0:
             self._retreat_need_memory = GameConfig.RETREAT_NEED_MEMORY_FRAMES
             had_recent_need = True
 
         value = 0.0
         last_t = previous.get("lane_t")
         cur_t = current.get("lane_t")
-        if retreat_need > 0 and last_t is not None and cur_t is not None:
+        if movement_need > 0 and last_t is not None and cur_t is not None:
             retreat_delta = max(0.0, last_t - cur_t)
             if retreat_delta > 0:
                 value += min(
                     GameConfig.RETREAT_MOVE_MAX_STEP,
                     (retreat_delta / GameConfig.RETREAT_MOVE_T_SCALE)
                     * GameConfig.RETREAT_MOVE_MAX_STEP
-                    * retreat_need,
+                    * movement_need,
                 )
 
         hp_delta = float(current.get("hp_ratio", 0.0) or 0.0) - float(
             previous.get("hp_ratio", 0.0) or 0.0
         )
-        if had_recent_need and current.get("in_retreat_zone") and hp_delta > 0:
+        previous_recall_low_hp = (
+            float(previous.get("hp_ratio", 0.0) or 0.0)
+            < GameConfig.RECALL_LOW_HP_THRESHOLD
+        )
+        recall_recovery_context = (
+            current.get("should_recall")
+            or self._recall_channel_steps > 0
+            or previous_recall_low_hp
+        )
+        if (
+            had_recent_need
+            and current.get("in_retreat_zone")
+            and hp_delta > 0
+            and not recall_recovery_context
+        ):
             value += min(
                 GameConfig.RETREAT_HEAL_MAX_STEP,
                 hp_delta * GameConfig.RETREAT_HEAL_SCALE,

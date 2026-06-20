@@ -441,6 +441,7 @@ class AgentPpoFeatureSwapTests(unittest.TestCase):
             "invalid_target_penalty_sum",
             "rwd_recall_recover",
             "recall_button_rate_when_needed",
+            "recall_interrupt_penalty_sum",
             "recall_explore_button9_prob_avg",
             "recall_explore_forced_legal_cnt",
         ]:
@@ -603,6 +604,8 @@ class AgentPpoFeatureSwapTests(unittest.TestCase):
 
         expected = GameConfig.RECALL_START_REWARD + GameConfig.RECALL_SUCCESS_REWARD
         self.assertAlmostEqual(reward["recall_recover"], expected)
+        self.assertEqual(reward["lane_progress"], 0.0)
+        self.assertGreater(reward["reward_sum"], 0.0)
         self.assertGreater(reward["recall_recover"], GameConfig.RECALL_INTERRUPT_PENALTY)
         self.assertLess(reward["recall_recover"], GameConfig.REWARD_WEIGHT_DICT["kill"])
         self.assertEqual(stats["recall_need_cnt"], 1)
@@ -672,6 +675,116 @@ class AgentPpoFeatureSwapTests(unittest.TestCase):
         self.assertEqual(stats["recall_need_cnt"], 3)
         self.assertEqual(stats["recall_miss_cnt"], 1)
         self.assertEqual(stats["recall_interrupt_cnt"], 1)
+        self.assertAlmostEqual(
+            stats["recall_interrupt_penalty_sum"],
+            -GameConfig.RECALL_INTERRUPT_PENALTY,
+        )
+
+    def test_ppo_recall_need_penalizes_walking_back_instead_of_recall(self):
+        manager = GameRewardManager(MAIN_ID)
+        low_hp_safe = make_frame(
+            main=make_hero(MAIN_ID, 1, hp=300, max_hp=1000, x=-10000),
+            enemy=make_hero(ENEMY_ID, 2, hp=0, max_hp=1000, x=10000),
+        )
+
+        manager.result(low_hp_safe)
+        manager.set_distance_penalty([2, 0, 0, 0, 0, 0], low_hp_safe)
+        reward = manager.result(low_hp_safe)
+        stats = manager.consume_monitor_stats()
+
+        self.assertAlmostEqual(reward["recall_recover"], -GameConfig.RECALL_MISS_PENALTY)
+        self.assertEqual(stats["recall_need_cnt"], 1)
+        self.assertEqual(stats["recall_miss_cnt"], 1)
+
+    def test_ppo_safe_low_hp_heal_without_recall_does_not_get_retreat_reward(self):
+        manager = GameRewardManager(MAIN_ID)
+        low_hp_backfield = make_frame(
+            main=make_hero(MAIN_ID, 1, hp=300, max_hp=1000, x=-20000),
+            enemy=make_hero(ENEMY_ID, 2, hp=900, max_hp=1000, attack_range=5000, x=1000),
+        )
+        recovered_backfield = make_frame(
+            main=make_hero(MAIN_ID, 1, hp=760, max_hp=1000, x=-20000),
+            enemy=make_hero(ENEMY_ID, 2, hp=900, max_hp=1000, attack_range=5000, x=1000),
+        )
+
+        manager.result(low_hp_backfield)
+        reward = manager.result(recovered_backfield)
+
+        self.assertEqual(reward["lane_progress"], 0.0)
+        self.assertAlmostEqual(reward["retreat_recover"], 0.0)
+        self.assertAlmostEqual(reward["recall_recover"], 0.0)
+
+    def test_ppo_danger_low_hp_retreat_move_beats_staying_in_threat(self):
+        retreat_manager = GameRewardManager(MAIN_ID)
+        stay_manager = GameRewardManager(MAIN_ID)
+        threatened_low_hp = make_frame(
+            main=make_hero(MAIN_ID, 1, hp=300, max_hp=1000, x=0),
+            enemy=make_hero(ENEMY_ID, 2, hp=900, max_hp=1000, attack_range=5000, x=1000),
+        )
+        safer_low_hp = make_frame(
+            main=make_hero(MAIN_ID, 1, hp=300, max_hp=1000, x=-10000),
+            enemy=make_hero(ENEMY_ID, 2, hp=900, max_hp=1000, attack_range=5000, x=1000),
+        )
+
+        retreat_manager.result(threatened_low_hp)
+        retreat_reward = retreat_manager.result(safer_low_hp)
+
+        stay_manager.result(threatened_low_hp)
+        stay_reward = stay_manager.result(threatened_low_hp)
+
+        self.assertGreater(retreat_reward["retreat_recover"], 0.0)
+        self.assertGreater(retreat_reward["reward_sum"], stay_reward["reward_sum"])
+
+    def test_ppo_recall_success_does_not_double_count_retreat_heal_reward(self):
+        manager = GameRewardManager(MAIN_ID)
+        threatened_low_hp = make_frame(
+            main=make_hero(MAIN_ID, 1, hp=300, max_hp=1000, x=0),
+            enemy=make_hero(ENEMY_ID, 2, hp=900, max_hp=1000, attack_range=5000, x=1000),
+        )
+        safe_low_hp = make_frame(
+            main=make_hero(MAIN_ID, 1, hp=300, max_hp=1000, x=-20000),
+            enemy=make_hero(ENEMY_ID, 2, hp=900, max_hp=1000, attack_range=5000, x=1000),
+        )
+        recovered_backfield = make_frame(
+            main=make_hero(MAIN_ID, 1, hp=760, max_hp=1000, x=-20000),
+            enemy=make_hero(ENEMY_ID, 2, hp=900, max_hp=1000, attack_range=5000, x=1000),
+        )
+
+        manager.result(threatened_low_hp)
+        manager.set_distance_penalty([GameConfig.RECALL_BUTTON, 0, 0, 0, 0, 0], safe_low_hp)
+        manager.result(safe_low_hp)
+        reward = manager.result(recovered_backfield)
+
+        self.assertEqual(reward["lane_progress"], 0.0)
+        self.assertAlmostEqual(reward["retreat_recover"], 0.0)
+        self.assertGreater(reward["recall_recover"], 0.0)
+
+    def test_ppo_recall_success_beats_natural_heal_in_total_reward(self):
+        recall_manager = GameRewardManager(MAIN_ID)
+        natural_manager = GameRewardManager(MAIN_ID)
+        low_hp_safe = make_frame(
+            main=make_hero(MAIN_ID, 1, hp=300, max_hp=1000, x=-10000),
+            enemy=make_hero(ENEMY_ID, 2, hp=0, max_hp=1000, x=10000),
+        )
+        recovered_backfield = make_frame(
+            main=make_hero(MAIN_ID, 1, hp=760, max_hp=1000, x=-20000),
+            enemy=make_hero(ENEMY_ID, 2, hp=0, max_hp=1000, x=10000),
+        )
+
+        recall_manager.result(low_hp_safe)
+        recall_manager.set_distance_penalty(
+            [GameConfig.RECALL_BUTTON, 0, 0, 0, 0, 0],
+            low_hp_safe,
+        )
+        recall_reward = recall_manager.result(recovered_backfield)
+
+        natural_manager.result(low_hp_safe)
+        natural_manager.set_distance_penalty([2, 0, 0, 0, 0, 0], low_hp_safe)
+        natural_reward = natural_manager.result(recovered_backfield)
+
+        self.assertGreater(recall_reward["reward_sum"], natural_reward["reward_sum"])
+        self.assertGreater(recall_reward["reward_sum"], 0.0)
+        self.assertLess(natural_reward["reward_sum"], 0.0)
 
     def test_ppo_recall_need_allows_low_hp_behind_own_tower(self):
         manager = GameRewardManager(MAIN_ID)
@@ -716,6 +829,133 @@ class AgentPpoFeatureSwapTests(unittest.TestCase):
         self.assertAlmostEqual(reward["recall_recover"], -GameConfig.RECALL_UNNEEDED_PENALTY)
         self.assertEqual(stats["recall_need_cnt"], 0)
         self.assertEqual(stats["recall_unneeded_cnt"], 1)
+
+    def test_ppo_major_reward_scale_hierarchy_is_consistent(self):
+        base = make_frame()
+
+        def transition_reward(next_frame, *, action=None):
+            manager = GameRewardManager(MAIN_ID)
+            manager.result(base)
+            if action is not None:
+                manager.set_distance_penalty(action, base)
+            return manager.result(next_frame)["reward_sum"]
+
+        tower_hit = make_frame(npcs=[
+            make_tower(1, x=-15000),
+            make_tower(2, hp=900, x=15000),
+        ])
+        hero_damage = make_frame()
+        hero_damage["hero_states"][0]["total_hurt_to_hero"] = 1000
+        kill = make_frame()
+        kill["hero_states"][0]["kill_cnt"] = 1
+        death = make_frame()
+        death["hero_states"][0]["dead_cnt"] = 1
+        money = make_frame()
+        money["hero_states"][0]["money_cnt"] = 40
+        exp = make_frame()
+        exp["hero_states"][0]["exp"] = 100
+        last_hit = make_frame()
+        last_hit["frame_action"] = {
+            "dead_action": [
+                {"death": {"sub_type": 11, "camp": 2}, "killer": {"runtime_id": MAIN_ID}},
+            ],
+        }
+        monster = make_frame()
+        monster["frame_action"] = {
+            "dead_action": [
+                {"death": {"sub_type": 12, "camp": 0}, "killer": {"runtime_id": MAIN_ID}},
+            ],
+        }
+
+        kill_reward = transition_reward(kill)
+        hero_damage_reward = transition_reward(hero_damage)
+        last_hit_reward = transition_reward(last_hit)
+        monster_reward = transition_reward(monster)
+        tower_reward = transition_reward(tower_hit)
+        exp_reward = transition_reward(exp)
+        money_reward = transition_reward(money)
+        death_reward = transition_reward(death)
+
+        self.assertGreater(kill_reward, hero_damage_reward)
+        self.assertGreater(hero_damage_reward, last_hit_reward)
+        self.assertGreater(last_hit_reward, monster_reward)
+        self.assertGreater(monster_reward, tower_reward)
+        self.assertGreater(tower_reward, exp_reward)
+        self.assertGreater(exp_reward, money_reward)
+        self.assertLess(death_reward, -kill_reward)
+
+    def test_ppo_lane_guidance_is_capped_below_kill_but_above_small_shaping(self):
+        manager = GameRewardManager(MAIN_ID)
+        fountain = make_frame(
+            main=make_hero(MAIN_ID, 1, hp=1000, max_hp=1000, x=-22500),
+            enemy=make_hero(ENEMY_ID, 2, hp=1000, max_hp=1000, x=20000),
+            npcs=[
+                make_tower(1, x=-15000),
+                make_tower(2, x=15000),
+            ],
+        )
+        toward_lane = make_frame(
+            main=make_hero(MAIN_ID, 1, hp=1000, max_hp=1000, x=-18000),
+            enemy=make_hero(ENEMY_ID, 2, hp=1000, max_hp=1000, x=20000),
+            npcs=[
+                make_tower(1, x=-15000),
+                make_tower(2, x=15000),
+            ],
+        )
+        kill = make_frame()
+        kill["hero_states"][0]["kill_cnt"] = 1
+        kill_manager = GameRewardManager(MAIN_ID)
+
+        manager.result(fountain)
+        lane_reward = manager.result(toward_lane)["reward_sum"]
+        kill_manager.result(make_frame())
+        kill_reward = kill_manager.result(kill)["reward_sum"]
+
+        self.assertGreater(lane_reward, 0.0)
+        self.assertLess(lane_reward, kill_reward)
+        self.assertLessEqual(
+            GameConfig.LANE_PROGRESS_MAX_PER_EPISODE
+            * GameConfig.REWARD_WEIGHT_DICT["lane_progress"],
+            kill_reward,
+        )
+
+    def test_ppo_action_shaping_prefers_correct_actions_without_dominating_objectives(self):
+        low_hp_minion_window = make_frame(
+            main=make_hero(MAIN_ID, 1, hp=1000, max_hp=1000, attack_range=5000, x=0),
+            enemy=make_hero(ENEMY_ID, 2, hp=1000, max_hp=1000, x=12000),
+            npcs=[
+                make_tower(1, x=-15000),
+                make_tower(2, x=15000),
+                make_minion(601, 2, hp=100, x=1000),
+            ],
+        )
+
+        def action_reward(action):
+            manager = GameRewardManager(MAIN_ID)
+            manager.result(low_hp_minion_window)
+            manager.set_distance_penalty(action, low_hp_minion_window)
+            return manager.result(low_hp_minion_window)["reward_sum"]
+
+        correct_last_hit = action_reward([3, 0, 0, 0, 0, 3])
+        noop = action_reward([GameConfig.RECALL_NOOP_BUTTON, 0, 0, 0, 0, 0])
+        wrong_target = action_reward([3, 0, 0, 0, 0, 1])
+
+        self.assertGreater(correct_last_hit, noop)
+        self.assertGreater(noop, wrong_target)
+        self.assertLess(correct_last_hit, 1.0)
+
+    def test_ppo_terminal_reward_dominates_dense_objectives(self):
+        win_reward = {"reward_sum": 0.0}
+        loss_reward = {"reward_sum": 0.0}
+        win_manager = GameRewardManager(MAIN_ID)
+        loss_manager = GameRewardManager(MAIN_ID)
+        win_bonus = win_manager.apply_terminal_outcome(win_reward, make_frame(), win=1)
+        loss_bonus = loss_manager.apply_terminal_outcome(loss_reward, make_frame(), win=0)
+
+        self.assertGreater(win_bonus, GameConfig.REWARD_WEIGHT_DICT["kill"])
+        self.assertLess(loss_bonus, -GameConfig.REWARD_WEIGHT_DICT["kill"])
+        self.assertEqual(win_reward["reward_sum"], win_bonus)
+        self.assertEqual(loss_reward["reward_sum"], loss_bonus)
 
 
 if __name__ == "__main__":
