@@ -362,6 +362,13 @@ def build_monitor():
         ("recall_success_cnt", "回城恢复成功次数", "1"),
         ("recall_unneeded_cnt", "不需回城误按次数", "1"),
         ("recall_button_rate_when_needed", "需求时回城按钮占比", "0.0001"),
+        ("recall_explore_need_cnt", "探索回城需求次数", "1"),
+        ("recall_explore_legal_cnt", "探索回城合法次数", "1"),
+        ("recall_explore_legal_rate", "探索回城合法占比", "0.0001"),
+        ("recall_explore_override_cnt", "探索覆盖动作次数", "1"),
+        ("recall_explore_override_rate", "探索覆盖占比", "0.0001"),
+        ("recall_explore_hold_cnt", "探索保持回城次数", "1"),
+        ("recall_explore_button9_prob_avg", "回城按钮模型概率", "0.000001"),
     ]
     builder = builder.add_group(group_name="回城检测", group_name_en="recall_health")
     for en, cn, prec in recall_items:

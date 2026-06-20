@@ -1,5 +1,8 @@
 import unittest
+import sys
+import types
 from pathlib import Path
+from types import SimpleNamespace
 
 try:
     import torch
@@ -93,6 +96,45 @@ def make_frame(*, main=None, enemy=None, npcs=None):
 
 @unittest.skipIf(torch is None, "torch is not installed")
 class AgentPpoFeatureSwapTests(unittest.TestCase):
+    @staticmethod
+    def _install_base_agent_stub():
+        common = sys.modules.setdefault("common_python", types.ModuleType("common_python"))
+        utils = sys.modules.setdefault("common_python.utils", types.ModuleType("common_python.utils"))
+        common_func = types.ModuleType("common_python.utils.common_func")
+
+        def create_cls(name, **kwargs):
+            return type(
+                name,
+                (),
+                {
+                    "__init__": lambda self, **values: self.__dict__.update(values),
+                    "__repr__": lambda self: "{}({})".format(name, self.__dict__),
+                },
+            )
+
+        class Frame:
+            def __init__(self, **kwargs):
+                self.__dict__.update(kwargs)
+
+        common_func.create_cls = create_cls
+        common_func.Frame = Frame
+        sys.modules["common_python.utils.common_func"] = common_func
+        common.utils = utils
+        utils.common_func = common_func
+
+        kaiwudrl = sys.modules.setdefault("kaiwudrl", types.ModuleType("kaiwudrl"))
+        interface = sys.modules.setdefault("kaiwudrl.interface", types.ModuleType("kaiwudrl.interface"))
+        agent_module = types.ModuleType("kaiwudrl.interface.agent")
+
+        class BaseAgent:
+            def __init__(self, *args, **kwargs):
+                pass
+
+        agent_module.BaseAgent = BaseAgent
+        sys.modules["kaiwudrl.interface.agent"] = agent_module
+        kaiwudrl.interface = interface
+        interface.agent = agent_module
+
     def test_ppo_owns_feature_process(self):
         self.assertEqual(FeatureProcess.__module__, "agent_ppo.feature.feature_process")
         self.assertEqual(Config.FEATURE_DIM, FeatureConfig.FEATURE_DIM)
@@ -144,10 +186,8 @@ class AgentPpoFeatureSwapTests(unittest.TestCase):
         self.assertEqual(tuple(model.lstm_hidden_output.shape), (1, 1, Config.LSTM_UNIT_SIZE))
 
     def test_agent_samples_target_from_selected_button_logits(self):
-        try:
-            from agent_ppo.agent import Agent
-        except ModuleNotFoundError as exc:
-            self.skipTest("agent framework dependency is unavailable: {}".format(exc))
+        self._install_base_agent_stub()
+        from agent_ppo.agent import Agent
 
         agent = Agent.__new__(Agent)
         agent.label_size_list = Config.LABEL_SIZE_LIST
@@ -366,8 +406,107 @@ class AgentPpoFeatureSwapTests(unittest.TestCase):
             "invalid_target_penalty_sum",
             "rwd_recall_recover",
             "recall_button_rate_when_needed",
+            "recall_explore_button9_prob_avg",
         ]:
             self.assertIn(marker, monitor_source)
+
+    def test_ppo_recall_exploration_overrides_to_legal_recall_button(self):
+        self._install_base_agent_stub()
+        from agent_ppo.agent import Agent
+
+        old_prob = GameConfig.RECALL_EXPLORATION_PROB
+        old_max = GameConfig.RECALL_EXPLORATION_MAX_STARTS_PER_EPISODE
+        try:
+            GameConfig.RECALL_EXPLORATION_PROB = 1.0
+            GameConfig.RECALL_EXPLORATION_MAX_STARTS_PER_EPISODE = 1
+            agent = self._recall_explore_agent()
+            observation = self._recall_explore_observation()
+            prob = [0.0] * Config.LABEL_SUM
+            prob[GameConfig.RECALL_BUTTON] = 0.0007
+            act_data = SimpleNamespace(action=[2, 0, 0, 0, 0, 0], prob=[prob])
+
+            action = agent.action_process(observation, act_data, True)
+            stats = agent.consume_action_mask_stats()
+
+            self.assertEqual(action[0], GameConfig.RECALL_BUTTON)
+            self.assertEqual(act_data.action[0], GameConfig.RECALL_BUTTON)
+            self.assertEqual(stats["recall_explore_need_cnt"], 1)
+            self.assertEqual(stats["recall_explore_legal_cnt"], 1)
+            self.assertEqual(stats["recall_explore_override_cnt"], 1)
+            self.assertAlmostEqual(stats["recall_explore_button9_prob_avg"], 0.0007)
+        finally:
+            GameConfig.RECALL_EXPLORATION_PROB = old_prob
+            GameConfig.RECALL_EXPLORATION_MAX_STARTS_PER_EPISODE = old_max
+
+    def test_ppo_recall_exploration_respects_illegal_recall_button(self):
+        self._install_base_agent_stub()
+        from agent_ppo.agent import Agent
+
+        old_prob = GameConfig.RECALL_EXPLORATION_PROB
+        try:
+            GameConfig.RECALL_EXPLORATION_PROB = 1.0
+            agent = self._recall_explore_agent()
+            observation = self._recall_explore_observation()
+            observation["legal_action"][GameConfig.RECALL_BUTTON] = 0.0
+            act_data = SimpleNamespace(
+                action=[2, 0, 0, 0, 0, 0],
+                prob=[[0.0] * Config.LABEL_SUM],
+            )
+
+            action = agent.action_process(observation, act_data, True)
+            stats = agent.consume_action_mask_stats()
+
+            self.assertEqual(action[0], 2)
+            self.assertEqual(stats["recall_explore_need_cnt"], 1)
+            self.assertEqual(stats["recall_explore_legal_cnt"], 0)
+            self.assertEqual(stats["recall_explore_override_cnt"], 0)
+        finally:
+            GameConfig.RECALL_EXPLORATION_PROB = old_prob
+
+    def test_ppo_recall_exploration_holds_active_channel_with_noop(self):
+        self._install_base_agent_stub()
+        from agent_ppo.agent import Agent
+
+        old_hold_prob = GameConfig.RECALL_EXPLORATION_HOLD_PROB
+        try:
+            GameConfig.RECALL_EXPLORATION_HOLD_PROB = 1.0
+            agent = self._recall_explore_agent()
+            agent.reward_manager._recall_channel_steps = 10
+            observation = self._recall_explore_observation()
+            act_data = SimpleNamespace(
+                action=[3, 0, 0, 0, 0, 1],
+                prob=[[0.0] * Config.LABEL_SUM],
+            )
+
+            action = agent.action_process(observation, act_data, True)
+            stats = agent.consume_action_mask_stats()
+
+            self.assertEqual(action[0], GameConfig.RECALL_NOOP_BUTTON)
+            self.assertEqual(stats["recall_explore_override_cnt"], 1)
+            self.assertEqual(stats["recall_explore_hold_cnt"], 1)
+        finally:
+            GameConfig.RECALL_EXPLORATION_HOLD_PROB = old_hold_prob
+
+    def _recall_explore_agent(self):
+        self._install_base_agent_stub()
+        from agent_ppo.agent import Agent
+
+        agent = Agent.__new__(Agent)
+        agent.label_size_list = Config.LABEL_SIZE_LIST
+        agent.legal_action_size = Config.LEGAL_ACTION_SIZE_LIST
+        agent.reward_manager = GameRewardManager(MAIN_ID)
+        agent._action_mask_stats = {}
+        agent._reset_recall_exploration_state()
+        return agent
+
+    def _recall_explore_observation(self):
+        return {
+            "frame_state": make_frame(
+                main=make_hero(MAIN_ID, 1, hp=300, max_hp=1000, x=-10000),
+                enemy=make_hero(ENEMY_ID, 2, hp=0, max_hp=1000, x=10000),
+            ),
+            "legal_action": torch.ones(sum(Config.LEGAL_ACTION_SIZE_LIST)).numpy(),
+        }
 
     def test_ppo_recall_reward_encourages_start_and_successful_recovery(self):
         manager = GameRewardManager(MAIN_ID)

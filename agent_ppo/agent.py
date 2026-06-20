@@ -10,8 +10,11 @@ Author: Tencent AI Arena Authors
 
 import torch
 
-torch.set_num_threads(1)
-torch.set_num_interop_threads(1)
+try:
+    torch.set_num_threads(1)
+    torch.set_num_interop_threads(1)
+except RuntimeError:
+    pass
 
 import os
 import random
@@ -25,7 +28,7 @@ from agent_ppo.feature.action_mask import (
 import numpy as np
 from kaiwudrl.interface.agent import BaseAgent
 
-from agent_ppo.conf.conf import Config, FeatureConfig
+from agent_ppo.conf.conf import Config, FeatureConfig, GameConfig
 from agent_ppo.feature.reward_process import GameRewardManager
 from torch.optim.lr_scheduler import LambdaLR
 from agent_ppo.algorithm.algorithm import Algorithm
@@ -95,6 +98,7 @@ class Agent(BaseAgent):
             "button3_masked_no_entity_target_cnt": 0,
             "button3_target0_or_self_suppressed_cnt": 0,
         }
+        self._reset_recall_exploration_state()
 
         self.algorithm = Algorithm(self.model, self.optimizer, self.scheduler, self.device, self.logger, self.monitor)
 
@@ -127,6 +131,7 @@ class Agent(BaseAgent):
         self.lstm_cell = np.zeros([self.lstm_unit_size])
         self.reward_manager = GameRewardManager(self.player_id)
         self.feature_processes = FeatureProcess(self.hero_camp)
+        self._reset_recall_exploration_state()
 
     def _model_inference(self, list_obs_data):
         # Using the network for inference
@@ -222,6 +227,11 @@ class Agent(BaseAgent):
         if is_stochastic:
             # Use stochastic sampling action
             # 采用随机采样动作 action
+            act_data.action = self._maybe_apply_recall_exploration(
+                observation,
+                act_data.action,
+                act_data,
+            )
             return act_data.action
         else:
             # Use the action with the highest probability
@@ -273,9 +283,151 @@ class Agent(BaseAgent):
 
     def consume_action_mask_stats(self):
         stats = action_mask_stats_rates(self._action_mask_stats)
+        need = self._action_mask_stats.get("recall_explore_need_cnt", 0)
+        legal = self._action_mask_stats.get("recall_explore_legal_cnt", 0)
+        prob_sum = self._action_mask_stats.get("recall_explore_button9_prob_sum", 0.0)
+        stats["recall_explore_legal_rate"] = round(legal / need if need > 0 else 0.0, 4)
+        stats["recall_explore_override_rate"] = round(
+            self._action_mask_stats.get("recall_explore_override_cnt", 0) / need
+            if need > 0 else 0.0,
+            4,
+        )
+        stats["recall_explore_button9_prob_avg"] = round(prob_sum / need if need > 0 else 0.0, 6)
         for key in self._action_mask_stats:
             self._action_mask_stats[key] = 0
         return stats
+
+    def _reset_recall_exploration_state(self):
+        self._recall_explore_starts_this_episode = 0
+        if not hasattr(self, "_action_mask_stats"):
+            self._action_mask_stats = {}
+        self._action_mask_stats.update(
+            {
+                "recall_explore_need_cnt": 0,
+                "recall_explore_legal_cnt": 0,
+                "recall_explore_override_cnt": 0,
+                "recall_explore_hold_cnt": 0,
+                "recall_explore_button9_prob_sum": 0.0,
+            }
+        )
+
+    def _maybe_apply_recall_exploration(self, observation, action, act_data):
+        if not getattr(GameConfig, "RECALL_EXPLORATION_ENABLED", False):
+            return action
+        if self.reward_manager is None or observation is None:
+            return action
+        frame_state = observation.get("frame_state")
+        legal_action = observation.get("legal_action")
+        if frame_state is None or legal_action is None:
+            return action
+
+        context = self._recall_exploration_context(frame_state)
+        if context is None or not context["should_recall"]:
+            return action
+
+        adjusted_legal = adjust_raw_legal_action_for_button_targets(np.array(legal_action))
+        legal_actions = np.split(
+            adjusted_legal,
+            [sum(self.label_size_list[: index + 1]) for index in range(len(self.label_size_list) - 1)],
+        )
+        button_mask = legal_actions[0]
+        button9_legal = self._button_is_legal(button_mask, GameConfig.RECALL_BUTTON)
+        button9_prob = self._action_prob(act_data, GameConfig.RECALL_BUTTON)
+
+        self._action_mask_stats["recall_explore_need_cnt"] += 1
+        self._action_mask_stats["recall_explore_button9_prob_sum"] += button9_prob
+        if button9_legal:
+            self._action_mask_stats["recall_explore_legal_cnt"] += 1
+
+        active = getattr(self.reward_manager, "_recall_channel_steps", 0) > 0
+        if active:
+            return self._maybe_hold_recall_channel(action, legal_actions)
+
+        if not button9_legal:
+            return action
+        if int(action[0]) == GameConfig.RECALL_BUTTON:
+            return action
+        if (
+            self._recall_explore_starts_this_episode
+            >= GameConfig.RECALL_EXPLORATION_MAX_STARTS_PER_EPISODE
+        ):
+            return action
+        if random.random() >= GameConfig.RECALL_EXPLORATION_PROB:
+            return action
+
+        self._recall_explore_starts_this_episode += 1
+        self._action_mask_stats["recall_explore_override_cnt"] += 1
+        return self._replace_action_button(
+            action,
+            GameConfig.RECALL_BUTTON,
+            legal_actions[-1],
+        )
+
+    def _maybe_hold_recall_channel(self, action, legal_actions):
+        if int(action[0]) in (GameConfig.RECALL_BUTTON, GameConfig.RECALL_NOOP_BUTTON):
+            return action
+        button_mask = legal_actions[0]
+        if not self._button_is_legal(button_mask, GameConfig.RECALL_NOOP_BUTTON):
+            return action
+        if random.random() >= GameConfig.RECALL_EXPLORATION_HOLD_PROB:
+            return action
+        self._action_mask_stats["recall_explore_override_cnt"] += 1
+        self._action_mask_stats["recall_explore_hold_cnt"] += 1
+        return self._replace_action_button(
+            action,
+            GameConfig.RECALL_NOOP_BUTTON,
+            legal_actions[-1],
+        )
+
+    def _recall_exploration_context(self, frame_state):
+        try:
+            main_hero = self.reward_manager._main_hero(frame_state)
+            if main_hero is None:
+                return None
+            main_camp = main_hero.get("camp")
+            main_hero, main_tower = self.reward_manager._get_camp_units(frame_state, main_camp)
+            enemy_hero, enemy_tower = self.reward_manager._get_camp_units(frame_state, 3 - main_camp)
+            should_recall = self.reward_manager.should_recall_recover(
+                frame_state,
+                main_camp,
+                main_hero,
+                main_tower,
+                enemy_hero,
+                enemy_tower,
+            )
+            return {"should_recall": should_recall}
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    def _replace_action_button(self, action, button, target_legal_action):
+        replaced = list(action)
+        replaced[0] = int(button)
+        replaced[-1] = self._preferred_target_for_button(button, target_legal_action)
+        return replaced
+
+    def _preferred_target_for_button(self, button, target_legal_action):
+        target_matrix = np.asarray(target_legal_action).reshape(
+            self.legal_action_size[0],
+            self.legal_action_size[-1] // self.legal_action_size[0],
+        )
+        target_mask = adjust_target_legal_for_button(button, target_matrix[int(button)])
+        flat = np.asarray(target_mask).reshape(-1)
+        if flat.size > 0 and flat[0] > 0:
+            return 0
+        legal = np.flatnonzero(flat > 0)
+        return int(legal[0]) if legal.size > 0 else 0
+
+    @staticmethod
+    def _button_is_legal(button_mask, button):
+        return button < len(button_mask) and button_mask[int(button)] > 0
+
+    @staticmethod
+    def _action_prob(act_data, button):
+        try:
+            probs = act_data.prob[0]
+            return float(probs[int(button)])
+        except (AttributeError, IndexError, TypeError, ValueError):
+            return 0.0
 
     def _sample_masked_action(self, logits, legal_action, target_logits_by_button=None):
         """

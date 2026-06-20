@@ -563,7 +563,7 @@ def _populate_dynamic_groups(available: set[str]) -> None:
     tokens = ["main_hero", "enemy_hero", "own_tower", "enemy_tower",
               "own_minions", "enemy_minions", "monsters", "bullets", "cakes"]
     rwd_prefixes = ["rwd_tower_hp_point", "rwd_lane_progress", "rwd_lane_presence",
-                     "rwd_retreat_recover", "rwd_hp_point", "rwd_danger_penalty",
+                     "rwd_retreat_recover", "rwd_recall_recover", "rwd_hp_point", "rwd_danger_penalty",
                      "rwd_kill", "rwd_death", "rwd_money", "rwd_exp",
                      "rwd_last_hit", "rwd_last_hit_focus", "rwd_minion_hp_point",
                      "rwd_kill_monster", "rwd_idle_penalty", "rwd_tower_attack",
