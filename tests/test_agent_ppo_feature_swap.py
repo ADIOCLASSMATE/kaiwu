@@ -258,6 +258,92 @@ class AgentPpoFeatureSwapTests(unittest.TestCase):
         self.assertEqual(stats["out_of_range_target_enemy_hero_rate"], 1.0)
         self.assertEqual(stats["attack_far_out_rate"], 1.0)
 
+    def test_ppo_out_of_range_penalty_scales_by_distance(self):
+        manager = GameRewardManager(MAIN_ID)
+        near_frame = make_frame(
+            main=make_hero(MAIN_ID, 1, attack_range=1000, x=0),
+            enemy=make_hero(ENEMY_ID, 2, x=1100),
+        )
+        mid_frame = make_frame(
+            main=make_hero(MAIN_ID, 1, attack_range=1000, x=0),
+            enemy=make_hero(ENEMY_ID, 2, x=1300),
+        )
+        far_frame = make_frame(
+            main=make_hero(MAIN_ID, 1, attack_range=1000, x=0),
+            enemy=make_hero(ENEMY_ID, 2, x=1800),
+        )
+
+        self.assertAlmostEqual(
+            manager.out_of_range_penalty([3, 0, 0, 0, 0, 1], near_frame),
+            -GameConfig.OUT_OF_RANGE_PENALTY * GameConfig.OUT_OF_RANGE_NEAR_MULT,
+        )
+        self.assertAlmostEqual(
+            manager.out_of_range_penalty([3, 0, 0, 0, 0, 1], mid_frame),
+            -GameConfig.OUT_OF_RANGE_PENALTY * GameConfig.OUT_OF_RANGE_MID_MULT,
+        )
+        self.assertAlmostEqual(
+            manager.out_of_range_penalty([3, 0, 0, 0, 0, 1], far_frame),
+            -GameConfig.OUT_OF_RANGE_PENALTY * GameConfig.OUT_OF_RANGE_FAR_MULT,
+        )
+
+    def test_ppo_noop_opportunity_penalty_is_small_and_safe_gated(self):
+        manager = GameRewardManager(MAIN_ID)
+        frame = make_frame(
+            main=make_hero(MAIN_ID, 1, attack_range=1000, x=0),
+            enemy=make_hero(ENEMY_ID, 2, x=900),
+            npcs=[
+                make_tower(1, x=-15000),
+                make_tower(2, x=15000),
+                make_minion(401, 2, hp=150, x=800),
+            ],
+        )
+
+        manager.set_distance_penalty([1, 0, 0, 0, 0, 0], frame)
+        reward = manager.result(frame)
+        stats = manager.consume_monitor_stats()
+
+        self.assertAlmostEqual(reward["distance_penalty"], -GameConfig.NOOP_MAX_PENALTY)
+        self.assertAlmostEqual(stats["noop_opportunity_penalty_sum"], -GameConfig.NOOP_MAX_PENALTY)
+        self.assertAlmostEqual(stats["action_penalty_sum"], -GameConfig.NOOP_MAX_PENALTY)
+        self.assertEqual(stats["out_of_range_cnt"], 0)
+
+        danger_manager = GameRewardManager(MAIN_ID)
+        danger_frame = make_frame(
+            main=make_hero(MAIN_ID, 1, hp=300, max_hp=1000, attack_range=1000, x=0),
+            enemy=make_hero(ENEMY_ID, 2, hp=1000, max_hp=1000, x=900),
+            npcs=[
+                make_tower(1, x=-15000),
+                make_tower(2, x=15000),
+                make_minion(401, 2, hp=150, x=800),
+            ],
+        )
+
+        danger_manager.set_distance_penalty([1, 0, 0, 0, 0, 0], danger_frame)
+        danger_reward = danger_manager.result(danger_frame)
+
+        self.assertEqual(danger_reward["distance_penalty"], 0.0)
+
+    def test_ppo_invalid_normal_attack_target_penalty_is_narrow(self):
+        manager = GameRewardManager(MAIN_ID)
+        frame = make_frame(
+            main=make_hero(MAIN_ID, 1, attack_range=1000, x=0),
+            enemy=make_hero(ENEMY_ID, 2, x=900),
+        )
+
+        manager.set_distance_penalty([3, 0, 0, 0, 0, 2], frame)
+        reward = manager.result(frame)
+        stats = manager.consume_monitor_stats()
+
+        self.assertAlmostEqual(
+            reward["distance_penalty"],
+            -GameConfig.INVALID_NORMAL_ATTACK_TARGET_PENALTY,
+        )
+        self.assertAlmostEqual(
+            stats["invalid_target_penalty_sum"],
+            -GameConfig.INVALID_NORMAL_ATTACK_TARGET_PENALTY,
+        )
+        self.assertEqual(stats["out_of_range_cnt"], 0)
+
     def test_ppo_monitor_builder_declares_observability_panels(self):
         repo = Path(__file__).resolve().parents[1]
         monitor_source = (repo / "agent_ppo/conf/monitor_builder.py").read_text(encoding="utf-8")
@@ -275,6 +361,9 @@ class AgentPpoFeatureSwapTests(unittest.TestCase):
             "action_head_%d_%d_rate",
             "noop_enemy_in_range_rate",
             "attack_far_out_rate",
+            "action_penalty_sum",
+            "noop_opportunity_penalty_sum",
+            "invalid_target_penalty_sum",
         ]:
             self.assertIn(marker, monitor_source)
 

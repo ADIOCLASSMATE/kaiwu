@@ -95,8 +95,11 @@ class GameRewardManager:
         self._last_pos = None
         self._inactive_frames = 0
         self._first_frame = True
-        # 距离整形：当前帧 action 的越程攻击惩罚，由 workflow 在 predict 后注入。
+        # 动作级轻量 shaping：当前 action 的越程/no-op/无效目标惩罚，由 workflow 注入。
         self._distance_penalty = 0.0
+        self._action_penalty_sum = 0.0
+        self._noop_opportunity_penalty_sum = 0.0
+        self._invalid_target_penalty_sum = 0.0
         self._attack_action_cnt = 0
         self._out_of_range_cnt = 0
         self._out_of_range_sum = 0.0
@@ -197,10 +200,17 @@ class GameRewardManager:
         if atk_range <= 0:
             return 0.0
         dist = math.hypot(tpos[0] - mpos[0], tpos[1] - mpos[1])
-        return -w if dist > atk_range else 0.0
+        if dist <= atk_range:
+            return 0.0
+        ratio = dist / atk_range
+        if ratio <= GameConfig.OUT_OF_RANGE_NEAR_RATIO:
+            return -w * GameConfig.OUT_OF_RANGE_NEAR_MULT
+        if ratio <= GameConfig.OUT_OF_RANGE_MID_RATIO:
+            return -w * GameConfig.OUT_OF_RANGE_MID_MULT
+        return -w * GameConfig.OUT_OF_RANGE_FAR_MULT
 
     def set_distance_penalty(self, action, decided_frame_state):
-        """由 workflow 在 predict/exploit 后调用，注入当前 action 的距离惩罚。"""
+        """由 workflow 在 predict/exploit 后调用，注入当前 action 的轻量惩罚。"""
         button = None
         if action is not None and len(action) >= 1:
             try:
@@ -210,10 +220,13 @@ class GameRewardManager:
         if button in GameConfig.ATTACK_BUTTONS:
             self._attack_action_cnt += 1
         self._record_action_stats(action, decided_frame_state)
-        self._distance_penalty = self.out_of_range_penalty(action, decided_frame_state)
-        if self._distance_penalty < 0:
+        range_penalty = self.out_of_range_penalty(action, decided_frame_state)
+        action_choice_penalty = self._action_choice_penalty(action, decided_frame_state)
+        self._distance_penalty = range_penalty + action_choice_penalty
+        self._action_penalty_sum += self._distance_penalty
+        if range_penalty < 0:
             self._out_of_range_cnt += 1
-            self._out_of_range_sum += self._distance_penalty
+            self._out_of_range_sum += range_penalty
             if button in self._out_of_range_button_counts:
                 self._out_of_range_button_counts[button] += 1
             target_bucket = self._target_bucket(action[5]) if action is not None and len(action) >= 6 else "other"
@@ -227,6 +240,68 @@ class GameRewardManager:
             action,
             decided_frame_state,
         )
+
+    def _action_choice_penalty(self, action, decided_frame_state):
+        if action is None or len(action) < 6:
+            return 0.0
+        try:
+            button = int(action[0])
+            target = int(action[5])
+        except (TypeError, ValueError):
+            return 0.0
+
+        penalty = 0.0
+        if button == 1:
+            noop_penalty = self._noop_opportunity_penalty(decided_frame_state)
+            self._noop_opportunity_penalty_sum += noop_penalty
+            penalty += noop_penalty
+        elif button == 3 and target in (0, 2):
+            invalid_target_penalty = -GameConfig.INVALID_NORMAL_ATTACK_TARGET_PENALTY
+            self._invalid_target_penalty_sum += invalid_target_penalty
+            penalty += invalid_target_penalty
+        return penalty
+
+    def _noop_opportunity_penalty(self, decided_frame_state):
+        if not self._is_safe_to_penalize_noop(decided_frame_state):
+            return 0.0
+
+        penalty = 0.0
+        if self._enemy_hero_in_main_attack_range(decided_frame_state):
+            penalty -= GameConfig.NOOP_ENEMY_IN_RANGE_PENALTY
+        if self._has_last_hit_window(decided_frame_state):
+            penalty -= GameConfig.NOOP_LAST_HIT_WINDOW_PENALTY
+        if self._safe_tower_attack_available(decided_frame_state):
+            penalty -= GameConfig.NOOP_TOWER_WINDOW_PENALTY
+        elif self._is_frontline_state(decided_frame_state):
+            penalty -= GameConfig.NOOP_FRONTLINE_PENALTY
+        return max(penalty, -GameConfig.NOOP_MAX_PENALTY)
+
+    def _is_safe_to_penalize_noop(self, decided_frame_state):
+        main_hero = self._main_hero(decided_frame_state)
+        if main_hero is None:
+            return False
+        main_camp = main_hero.get("camp")
+        if main_camp not in (1, 2):
+            return False
+        if self._raw_hp_ratio(main_hero) < GameConfig.RETREAT_LOW_HP_THRESHOLD:
+            return False
+        if self._in_retreat_zone(decided_frame_state, main_hero, main_camp):
+            return False
+        enemy_camp = 2 if main_camp == 1 else 1
+        enemy_hero, enemy_tower = self._get_camp_units(decided_frame_state, enemy_camp)
+        return (
+            self.calculate_danger_penalty(
+                decided_frame_state,
+                main_hero,
+                enemy_hero,
+                enemy_tower,
+                main_camp,
+            )
+            <= 0
+        )
+
+    def _safe_tower_attack_available(self, decided_frame_state):
+        return self.tower_attack_reward([3, 0, 0, 0, 0, 7], decided_frame_state) > 0
 
     def _record_action_stats(self, action, decided_frame_state):
         if action is None or len(action) < 6:
@@ -394,6 +469,9 @@ class GameRewardManager:
             "out_of_range_cnt": self._out_of_range_cnt,
             "out_of_range_rate": round(out_of_range_rate, 4),
             "out_of_range_sum": round(self._out_of_range_sum, 3),
+            "action_penalty_sum": round(self._action_penalty_sum, 3),
+            "noop_opportunity_penalty_sum": round(self._noop_opportunity_penalty_sum, 3),
+            "invalid_target_penalty_sum": round(self._invalid_target_penalty_sum, 3),
             "attack_action_cnt": attack_cnt,
             "resolved_attack_cnt": self._resolved_attack_cnt,
             "attack_in_range_rate": round(
@@ -496,6 +574,9 @@ class GameRewardManager:
         self._attack_action_cnt = 0
         self._out_of_range_cnt = 0
         self._out_of_range_sum = 0.0
+        self._action_penalty_sum = 0.0
+        self._noop_opportunity_penalty_sum = 0.0
+        self._invalid_target_penalty_sum = 0.0
         self._reward_frame_cnt = 0
         self._idle_triggered_cnt = 0
         self._action_button_counts = [0] * 12

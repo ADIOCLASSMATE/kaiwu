@@ -97,7 +97,21 @@ class GameConfig:
 
     # ---- 越程攻击惩罚（distance shaping，与 action 相关，独立于上面的帧差子项）----
     OUT_OF_RANGE_PENALTY = 0.01      # 轻量动作惩罚；设 0 关闭
+    OUT_OF_RANGE_NEAR_RATIO = 1.15   # 刚出攻击范围，只给半额惩罚
+    OUT_OF_RANGE_MID_RATIO = 1.50    # 中等越程给基准惩罚，更远给加重惩罚
+    OUT_OF_RANGE_NEAR_MULT = 0.5
+    OUT_OF_RANGE_MID_MULT = 1.0
+    OUT_OF_RANGE_FAR_MULT = 2.0
     ATTACK_BUTTONS = (3, 4, 5, 6, 8, 10, 11)
+
+    # ---- 可行动窗口 no-op / 普攻无效目标小惩罚 ----
+    # 这些都是 action 级轻量 shaping，只在安全且有明确机会时启用，避免逼出无脑进攻。
+    NOOP_ENEMY_IN_RANGE_PENALTY = 0.004
+    NOOP_LAST_HIT_WINDOW_PENALTY = 0.006
+    NOOP_TOWER_WINDOW_PENALTY = 0.004
+    NOOP_FRONTLINE_PENALTY = 0.002
+    NOOP_MAX_PENALTY = 0.01
+    INVALID_NORMAL_ATTACK_TARGET_PENALTY = 0.004
 
     # ---- 低血危险区惩罚 ----
     DANGER_HP_THRESHOLD = 0.45       # 低于该血量，若仍处于敌方威胁区则开始惩罚

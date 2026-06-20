@@ -217,6 +217,20 @@ def _parse_monitor_via_mock(monitor_path: Path) -> list[str]:
                 agent_diy.conf.conf
             )
 
+        # Mock agent_ppo.conf.conf (for FeatureConfig.HERO_CONFIG_IDS + GameConfig.ATTACK_BUTTONS)
+        agent_ppo = MagicMock()
+        agent_ppo.conf = MagicMock()
+        agent_ppo.conf.conf = MagicMock()
+        agent_ppo.conf.conf.FeatureConfig = type("FC", (), {"HERO_CONFIG_IDS": [112, 133, 199]})
+        agent_ppo.conf.conf.GameConfig = type("GC", (), {"ATTACK_BUTTONS": (3, 4, 5, 6, 8, 10, 11)})
+        for mod_name in ["agent_ppo", "agent_ppo.conf", "agent_ppo.conf.conf"]:
+            saved[mod_name] = sys.modules.get(mod_name)
+            sys.modules[mod_name] = (
+                agent_ppo if mod_name == "agent_ppo" else
+                agent_ppo.conf if mod_name == "agent_ppo.conf" else
+                agent_ppo.conf.conf
+            )
+
         spec = importlib.util.spec_from_file_location(
             "_pull_monitor_builder", monitor_path
         )
@@ -284,17 +298,33 @@ def parse_monitor_metrics(monitor_path: Path) -> dict[str, str]:
     return {name: f"avg(kaiwu_{name}{{}})" for name in sorted(set(names))}
 
 
-def discover_all_metrics(monitor_path: Path | None = None) -> dict[str, str]:
+def default_monitor_paths() -> list[Path]:
+    """Return monitor builders shipped in this repo."""
+    return [
+        ROOT / "agent_diy/conf/monitor_builder.py",
+        ROOT / "agent_ppo/conf/monitor_builder.py",
+    ]
+
+
+def discover_monitor_metrics(monitor_paths: list[Path]) -> dict[str, str]:
+    metrics: dict[str, str] = {}
+    for monitor_path in monitor_paths:
+        for name, expr in parse_monitor_metrics(monitor_path).items():
+            metrics.setdefault(name, expr)
+    return metrics
+
+
+def discover_all_metrics(monitor_paths: list[Path] | None = None) -> dict[str, str]:
     """Merge standard 37 metrics with all custom metrics from monitor_builder.py.
 
     Standard metrics keep their battle-tested expressions (some use sum/max_over_time).
     Custom metrics use auto-generated avg(<name>{}).
     """
-    if monitor_path is None:
-        monitor_path = ROOT / "agent_diy/conf/monitor_builder.py"
+    if monitor_paths is None:
+        monitor_paths = default_monitor_paths()
 
     all_metrics = dict(STANDARD_METRICS)  # copy
-    custom = parse_monitor_metrics(monitor_path)
+    custom = discover_monitor_metrics(monitor_paths)
 
     # Add custom metrics that don't overlap with standard
     for name, expr in sorted(custom.items()):
@@ -302,6 +332,13 @@ def discover_all_metrics(monitor_path: Path | None = None) -> dict[str, str]:
             all_metrics[name] = expr
 
     return all_metrics
+
+
+def display_monitor_path(path: Path) -> str:
+    try:
+        return str(path.relative_to(ROOT))
+    except ValueError:
+        return str(path)
 
 
 # ── task helpers ──────────────────────────────────────────────────────
@@ -503,9 +540,12 @@ METRIC_GROUPS: dict[str, list[str]] = {
     "entropy_per_head": ["entropy_head_0", "entropy_head_1", "entropy_head_2",
                          "entropy_head_3", "entropy_head_4", "entropy_head_5"],
     "advantage": ["adv_mean", "adv_std"],
-    "distance_shaping": ["out_of_range_cnt", "out_of_range_rate", "out_of_range_sum",
-                          "attack_action_cnt", "last_hit_window_cnt",
-                          "last_hit_window_attack_rate", "frontline_presence_rate"],
+    "distance_shaping": [],  # populated dynamically
+    "out_of_range_breakdown": [],  # populated dynamically
+    "noop_context": [],  # populated dynamically
+    "training_distribution": [],  # populated dynamically
+    "direction_head_distribution": [],  # populated dynamically
+    "action_mask_health": [],  # populated dynamically
     "idle_health": ["idle_triggered", "idle_triggered_rate"],
     "system": ["batch_train_cost_time_ms", "real_train_cost_time_ms",
                "data_fetch_cost_time_ms", "aisrv_learner_proxy_queue_len",
@@ -515,6 +555,7 @@ METRIC_GROUPS: dict[str, list[str]] = {
                "push_to_model_pool_err_cnt", "push_to_model_pool_succ_cnt",
                "pull_from_model_pool_err_cnt", "pull_from_model_pool_succ_cnt",
                "send_to_reverb_err_cnt", "send_to_reverb_succ_cnt"],
+    "misc_metrics": [],  # populated dynamically; catches future metrics
 }
 
 
@@ -562,6 +603,44 @@ def _populate_dynamic_groups(available: set[str]) -> None:
             sorted(n for n in available if n.startswith(prefix) and n not in action_names)
         )
     METRIC_GROUPS["action"] = action_names
+    # training distribution
+    METRIC_GROUPS["training_distribution"] = sorted(
+        n for n in available
+        if n.startswith(("opponent_", "hero_", "enemy_hero_", "mirror_"))
+        and not n.startswith("enemy_tower")   # exclude enemy_tower_hp
+    )
+    # distance shaping (expanded): all out_of_range_* and attack_* shaping metrics
+    METRIC_GROUPS["distance_shaping"] = sorted(
+        n for n in available
+        if n.startswith(("out_of_range_", "attack_action_", "last_hit_window_",
+                         "frontline_presence_", "attack_in_range_",
+                         "attack_near_out_", "attack_far_out_", "resolved_attack_",
+                         "action_penalty_", "invalid_target_penalty_"))
+    )
+    # out of range breakdown (button + target)
+    METRIC_GROUPS["out_of_range_breakdown"] = sorted(
+        n for n in available
+        if n.startswith("out_of_range_button_") or n.startswith("out_of_range_target_")
+    )
+    # direction head distribution
+    METRIC_GROUPS["direction_head_distribution"] = sorted(
+        n for n in available if n.startswith("action_head_")
+    )
+    # noop context
+    METRIC_GROUPS["noop_context"] = sorted(
+        n for n in available if n.startswith("noop_")
+    )
+    # action mask health
+    METRIC_GROUPS["action_mask_health"] = sorted(
+        n for n in available if n.startswith("button3_")
+    )
+    assigned = {
+        name
+        for group, names in METRIC_GROUPS.items()
+        if group != "misc_metrics"
+        for name in names
+    }
+    METRIC_GROUPS["misc_metrics"] = sorted(available - assigned)
 
 
 def build_summary(
@@ -737,11 +816,13 @@ Examples:
     print(f"  Time: {start_iso} → {end_iso}")
 
     # ── discover metrics ──
-    monitor_path = Path(args.monitor_path) if args.monitor_path else (ROOT / "agent_diy/conf/monitor_builder.py")
+    monitor_paths = [Path(args.monitor_path)] if args.monitor_path else default_monitor_paths()
     if args.no_standard:
-        metrics = parse_monitor_metrics(monitor_path)
+        metrics = discover_monitor_metrics(monitor_paths)
     else:
-        metrics = discover_all_metrics(monitor_path)
+        metrics = discover_all_metrics(monitor_paths)
+    monitor_label = ", ".join(display_monitor_path(path) for path in monitor_paths)
+    print(f"  Monitors: {monitor_label}")
     print(f"\nMetrics to pull: {len(metrics)} ({len(STANDARD_METRICS)} standard + {len(metrics) - len(STANDARD_METRICS)} custom)")
 
     # ── pull metrics ──
