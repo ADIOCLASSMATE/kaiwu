@@ -214,6 +214,10 @@ class Agent(BaseAgent):
         return d_action
 
     def observation_process(self, observation):
+        observation["recall_channel_active"] = (
+            self.reward_manager is not None
+            and getattr(self.reward_manager, "_recall_channel_steps", 0) > 0
+        )
         feature = self.feature_processes.process_feature(observation)
         feature_vec, legal_action = (
             feature,

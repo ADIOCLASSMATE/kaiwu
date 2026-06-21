@@ -49,7 +49,10 @@ class FeatureProcess:
 
     def process_feature(self, observation):
         frame_state = observation["frame_state"]
-        feat = self.builder.build(frame_state)
+        feat = self.builder.build(
+            frame_state,
+            recall_channel_active=bool(observation.get("recall_channel_active", False)),
+        )
         self._accumulate(feat)
         return feat
 

@@ -166,8 +166,8 @@ class GameConfig:
     RECALL_SUCCESS_MIN_TOWER_FACTOR = 0.20
     RECALL_SUCCESS_HP_DELTA = 0.04
     RECALL_RECOVER_MAX_PER_EPISODE = 1.5
-    RECALL_RECOVER_MIN_PER_EPISODE = -1.0
-    RECALL_EXPLORATION_ENABLED = True
+    RECALL_RECOVER_MIN_PER_EPISODE = -2.0
+    RECALL_EXPLORATION_ENABLED = False
     RECALL_EXPLORATION_PROB = 0.004
     RECALL_EXPLORATION_MAX_STARTS_PER_EPISODE = 3
     RECALL_EXPLORATION_HOLD_PROB = 1.0
@@ -448,11 +448,12 @@ class FeatureConfig:
     # ---- 全局特征（非 token，拼在 token 之后） ----
     # frame_progress, game_time_bucket(5), own_tower_alive, enemy_tower_alive,
     # main_in_enemy_tower_range, enemy_hero_in_my_atk_range, hp_adv, level_adv,
-    # money_adv, enemy_hero_visible, target_availability(5)
+    # recall_channel_active, enemy_hero_visible, target_availability(5)
     GAME_TIME_BUCKETS = (3000, 6000, 9000, 12000)
     GAME_TIME_ONEHOT_DIM = len(GAME_TIME_BUCKETS) + 1
     TARGET_AVAIL_DIM = 5
     GLOBAL_DIM = 1 + GAME_TIME_ONEHOT_DIM + 8 + TARGET_AVAIL_DIM
+    GLOBAL_RECALL_ACTIVE_OFFSET = 1 + GAME_TIME_ONEHOT_DIM + 2 + 2 + 2
 
     # ---- 总 token 数 / token 特征长度 / 总特征维度 ----
     NUM_TOKENS = sum(count for _, _, count in TOKEN_SEGMENTS)            # 19

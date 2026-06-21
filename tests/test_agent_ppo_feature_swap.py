@@ -185,6 +185,49 @@ class AgentPpoFeatureSwapTests(unittest.TestCase):
         self.assertEqual(tuple(model.lstm_cell_output.shape), (1, 1, Config.LSTM_UNIT_SIZE))
         self.assertEqual(tuple(model.lstm_hidden_output.shape), (1, 1, Config.LSTM_UNIT_SIZE))
 
+    def test_ppo_feature_reuses_global_money_adv_as_recall_active(self):
+        process = FeatureProcess(1)
+        observation = {
+            "frame_state": make_frame(),
+            "recall_channel_active": False,
+        }
+        recall_offset = (
+            FeatureConfig.TOKEN_FEATURE_DIM
+            + FeatureConfig.GLOBAL_RECALL_ACTIVE_OFFSET
+        )
+
+        inactive_feature = process.process_feature(observation)
+        observation["recall_channel_active"] = True
+        active_feature = process.process_feature(observation)
+
+        self.assertEqual(len(active_feature), FeatureConfig.FEATURE_DIM)
+        self.assertEqual(inactive_feature[recall_offset], 0.0)
+        self.assertEqual(active_feature[recall_offset], 1.0)
+
+    def test_agent_injects_recall_active_feature_from_reward_state(self):
+        self._install_base_agent_stub()
+        from agent_ppo.agent import Agent
+
+        agent = Agent.__new__(Agent)
+        agent.reward_manager = GameRewardManager(MAIN_ID)
+        agent.reward_manager._recall_channel_steps = 7
+        agent.feature_processes = FeatureProcess(1)
+        agent.lstm_cell = [0.0] * Config.LSTM_UNIT_SIZE
+        agent.lstm_hidden = [0.0] * Config.LSTM_UNIT_SIZE
+        recall_offset = (
+            FeatureConfig.TOKEN_FEATURE_DIM
+            + FeatureConfig.GLOBAL_RECALL_ACTIVE_OFFSET
+        )
+        observation = {
+            "frame_state": make_frame(),
+            "legal_action": torch.ones(sum(Config.LEGAL_ACTION_SIZE_LIST)).numpy(),
+        }
+
+        obs_data = agent.observation_process(observation)
+
+        self.assertTrue(observation["recall_channel_active"])
+        self.assertEqual(obs_data.feature[recall_offset], 1.0)
+
     def test_agent_samples_target_from_selected_button_logits(self):
         self._install_base_agent_stub()
         from agent_ppo.agent import Agent
@@ -451,9 +494,11 @@ class AgentPpoFeatureSwapTests(unittest.TestCase):
         self._install_base_agent_stub()
         from agent_ppo.agent import Agent
 
+        old_enabled = GameConfig.RECALL_EXPLORATION_ENABLED
         old_prob = GameConfig.RECALL_EXPLORATION_PROB
         old_max = GameConfig.RECALL_EXPLORATION_MAX_STARTS_PER_EPISODE
         try:
+            GameConfig.RECALL_EXPLORATION_ENABLED = True
             GameConfig.RECALL_EXPLORATION_PROB = 1.0
             GameConfig.RECALL_EXPLORATION_MAX_STARTS_PER_EPISODE = 1
             agent = self._recall_explore_agent()
@@ -472,6 +517,7 @@ class AgentPpoFeatureSwapTests(unittest.TestCase):
             self.assertEqual(stats["recall_explore_override_cnt"], 1)
             self.assertAlmostEqual(stats["recall_explore_button9_prob_avg"], 0.0007)
         finally:
+            GameConfig.RECALL_EXPLORATION_ENABLED = old_enabled
             GameConfig.RECALL_EXPLORATION_PROB = old_prob
             GameConfig.RECALL_EXPLORATION_MAX_STARTS_PER_EPISODE = old_max
 
@@ -479,9 +525,11 @@ class AgentPpoFeatureSwapTests(unittest.TestCase):
         self._install_base_agent_stub()
         from agent_ppo.agent import Agent
 
+        old_enabled = GameConfig.RECALL_EXPLORATION_ENABLED
         old_prob = GameConfig.RECALL_EXPLORATION_PROB
         old_force = GameConfig.RECALL_EXPLORATION_FORCE_LEGAL
         try:
+            GameConfig.RECALL_EXPLORATION_ENABLED = True
             GameConfig.RECALL_EXPLORATION_PROB = 1.0
             GameConfig.RECALL_EXPLORATION_FORCE_LEGAL = True
             agent = self._recall_explore_agent()
@@ -516,6 +564,7 @@ class AgentPpoFeatureSwapTests(unittest.TestCase):
             self.assertEqual(stats["recall_explore_forced_legal_cnt"], 0)
             self.assertEqual(stats["recall_explore_override_cnt"], 1)
         finally:
+            GameConfig.RECALL_EXPLORATION_ENABLED = old_enabled
             GameConfig.RECALL_EXPLORATION_PROB = old_prob
             GameConfig.RECALL_EXPLORATION_FORCE_LEGAL = old_force
 
@@ -523,9 +572,11 @@ class AgentPpoFeatureSwapTests(unittest.TestCase):
         self._install_base_agent_stub()
         from agent_ppo.agent import Agent
 
+        old_enabled = GameConfig.RECALL_EXPLORATION_ENABLED
         old_prob = GameConfig.RECALL_EXPLORATION_PROB
         old_force = GameConfig.RECALL_EXPLORATION_FORCE_LEGAL
         try:
+            GameConfig.RECALL_EXPLORATION_ENABLED = True
             GameConfig.RECALL_EXPLORATION_PROB = 1.0
             GameConfig.RECALL_EXPLORATION_FORCE_LEGAL = False
             agent = self._recall_explore_agent()
@@ -543,6 +594,7 @@ class AgentPpoFeatureSwapTests(unittest.TestCase):
             self.assertEqual(stats["recall_explore_forced_legal_cnt"], 0)
             self.assertEqual(stats["recall_explore_override_cnt"], 1)
         finally:
+            GameConfig.RECALL_EXPLORATION_ENABLED = old_enabled
             GameConfig.RECALL_EXPLORATION_PROB = old_prob
             GameConfig.RECALL_EXPLORATION_FORCE_LEGAL = old_force
 
@@ -550,20 +602,25 @@ class AgentPpoFeatureSwapTests(unittest.TestCase):
         self._install_base_agent_stub()
         from agent_ppo.agent import Agent
 
+        old_enabled = GameConfig.RECALL_EXPLORATION_ENABLED
+        GameConfig.RECALL_EXPLORATION_ENABLED = True
         agent = self._recall_explore_agent()
-        agent.reward_manager._recall_channel_steps = 10
-        observation = self._recall_explore_observation()
-        act_data = SimpleNamespace(
-            action=[3, 0, 0, 0, 0, 1],
-            prob=[[0.0] * Config.LABEL_SUM],
-        )
+        try:
+            agent.reward_manager._recall_channel_steps = 10
+            observation = self._recall_explore_observation()
+            act_data = SimpleNamespace(
+                action=[3, 0, 0, 0, 0, 1],
+                prob=[[0.0] * Config.LABEL_SUM],
+            )
 
-        action = agent.action_process(observation, act_data, True)
-        stats = agent.consume_action_mask_stats()
+            action = agent.action_process(observation, act_data, True)
+            stats = agent.consume_action_mask_stats()
 
-        self.assertEqual(action[0], GameConfig.RECALL_NOOP_BUTTON)
-        self.assertEqual(stats["recall_explore_override_cnt"], 1)
-        self.assertEqual(stats["recall_explore_hold_cnt"], 1)
+            self.assertEqual(action[0], GameConfig.RECALL_NOOP_BUTTON)
+            self.assertEqual(stats["recall_explore_override_cnt"], 1)
+            self.assertEqual(stats["recall_explore_hold_cnt"], 1)
+        finally:
+            GameConfig.RECALL_EXPLORATION_ENABLED = old_enabled
 
     def _recall_explore_agent(self):
         self._install_base_agent_stub()
