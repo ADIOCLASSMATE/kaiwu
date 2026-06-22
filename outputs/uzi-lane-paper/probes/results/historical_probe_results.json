@@ -1,0 +1,1844 @@
+{
+  "generated_at": "2026-06-22T21:15:22",
+  "python": "/Users/wjx/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+  "repo_root": "/Users/wjx/code/kaiwu",
+  "results": [
+    {
+      "commit": "721d426294075a65f972cd2c04bbea94ea1b6f82",
+      "config": {
+        "feature_dim": 561,
+        "hero_config_ids": [
+          112,
+          133,
+          199
+        ],
+        "label_size_list": [
+          12,
+          16,
+          16,
+          16,
+          16,
+          9
+        ],
+        "legal_action_size_list": [
+          12,
+          16,
+          16,
+          16,
+          16,
+          108
+        ],
+        "recall_enabled_default": false,
+        "recall_reward_weight_default": 0.0
+      },
+      "cwd": "/Users/wjx/code/kaiwu",
+      "dirty": true,
+      "errors": [],
+      "kind": "working_tree",
+      "label": "current_working_tree",
+      "ok": true,
+      "probes": {
+        "arli_mark_feature": {
+          "available": true,
+          "feature_len": 561,
+          "has_arli_mark_field": true,
+          "mark_values": [
+            {
+              "index": 0,
+              "nonzero": false,
+              "type": "own_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "index": 1,
+              "nonzero": false,
+              "type": "own_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "index": 2,
+              "nonzero": true,
+              "type": "own_minions",
+              "values": [
+                1.0,
+                1.0
+              ]
+            },
+            {
+              "index": 3,
+              "nonzero": false,
+              "type": "own_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "index": 0,
+              "nonzero": false,
+              "type": "enemy_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "index": 1,
+              "nonzero": false,
+              "type": "enemy_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "index": 2,
+              "nonzero": false,
+              "type": "enemy_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "index": 3,
+              "nonzero": false,
+              "type": "enemy_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            }
+          ]
+        },
+        "normal_attack_mask": {
+          "available": true,
+          "button3_after": 0.0,
+          "stats": {
+            "button3_entity_target_legal_cnt": 0.0,
+            "button3_legal_checked_cnt": 1.0,
+            "button3_masked_no_entity_target_cnt": 1.0,
+            "button3_no_entity_target_legal_cnt": 1.0,
+            "button3_target0_or_self_suppressed_cnt": 1.0
+          },
+          "target0_after": 0.0,
+          "target2_after": 0.0
+        },
+        "recall_low_hp_safe": {
+          "available": true,
+          "recall_button": 9,
+          "recall_enabled_for_probe": true,
+          "recall_recover": 0.06,
+          "recall_reward_weight_for_probe": 1.0,
+          "retreat_recover": 0.0,
+          "reward_sum": 0.06,
+          "stats": {
+            "recall_button_rate_when_needed": 1.0,
+            "recall_hold_cnt": 0.0,
+            "recall_interrupt_cnt": 0.0,
+            "recall_interrupt_penalty_sum": 0.0,
+            "recall_miss_cnt": 0.0,
+            "recall_need_cnt": 1.0,
+            "recall_start_cnt": 1.0,
+            "recall_success_cnt": 0.0,
+            "recall_success_reward_sum": 0.0,
+            "recall_unneeded_cnt": 0.0
+          }
+        },
+        "soldier_target_order": {
+          "available": true,
+          "distance_order_runtime_ids": [
+            30,
+            20,
+            10
+          ],
+          "input_runtime_ids": [
+            30,
+            10,
+            20
+          ],
+          "observed_slot_runtime_ids": [
+            10,
+            20,
+            30
+          ],
+          "runtime_id_order": [
+            10,
+            20,
+            30
+          ]
+        }
+      },
+      "returncode": 0,
+      "stderr": ""
+    },
+    {
+      "commit": "436d5ad605ef9ce26b79074a7f3b2549c5ee8a7a",
+      "config": {
+        "feature_dim": 561,
+        "hero_config_ids": [
+          112,
+          133,
+          199
+        ],
+        "label_size_list": [
+          12,
+          16,
+          16,
+          16,
+          16,
+          9
+        ],
+        "legal_action_size_list": [
+          12,
+          16,
+          16,
+          16,
+          16,
+          108
+        ],
+        "recall_enabled_default": null,
+        "recall_reward_weight_default": null
+      },
+      "cwd": "/private/var/folders/yk/1fv5_yds50jcwg_2sm5_vz1r0000gn/T/kaiwu-uzi-historical-probes/ppo_diy_feature_swap-436d5ad605ef",
+      "dirty": false,
+      "errors": [
+        {
+          "message": "No module named 'agent_ppo.feature.action_mask'",
+          "name": "normal_attack_mask",
+          "traceback": "Traceback (most recent call last):\n  File \"<string>\", line 101, in <module>\nModuleNotFoundError: No module named 'agent_ppo.feature.action_mask'\n",
+          "type": "ModuleNotFoundError"
+        },
+        {
+          "message": "No module named 'agent_ppo.feature.targeting'",
+          "name": "soldier_target_order",
+          "traceback": "Traceback (most recent call last):\n  File \"<string>\", line 127, in <module>\nModuleNotFoundError: No module named 'agent_ppo.feature.targeting'\n",
+          "type": "ModuleNotFoundError"
+        }
+      ],
+      "kind": "historical_commit",
+      "label": "ppo_diy_feature_swap",
+      "ok": true,
+      "probes": {
+        "arli_mark_feature": {
+          "available": true,
+          "feature_len": 561,
+          "has_arli_mark_field": true,
+          "mark_values": [
+            {
+              "index": 0,
+              "nonzero": false,
+              "type": "own_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "index": 1,
+              "nonzero": false,
+              "type": "own_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "index": 2,
+              "nonzero": true,
+              "type": "own_minions",
+              "values": [
+                1.0,
+                1.0
+              ]
+            },
+            {
+              "index": 3,
+              "nonzero": false,
+              "type": "own_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "index": 0,
+              "nonzero": false,
+              "type": "enemy_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "index": 1,
+              "nonzero": false,
+              "type": "enemy_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "index": 2,
+              "nonzero": false,
+              "type": "enemy_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "index": 3,
+              "nonzero": false,
+              "type": "enemy_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            }
+          ]
+        },
+        "normal_attack_mask": {
+          "available": false
+        },
+        "recall_low_hp_safe": {
+          "available": true,
+          "recall_button": 9,
+          "recall_enabled_for_probe": null,
+          "recall_recover": 0.0,
+          "recall_reward_weight_for_probe": null,
+          "retreat_recover": 0.0,
+          "reward_sum": 0.0,
+          "stats": {}
+        },
+        "soldier_target_order": {
+          "available": false
+        }
+      },
+      "returncode": 0,
+      "short_commit": "436d5ad",
+      "stderr": ""
+    },
+    {
+      "commit": "7b868460d431b963db9e73d1a4be1859f6c6c79e",
+      "config": {
+        "feature_dim": 561,
+        "hero_config_ids": [
+          112,
+          133,
+          199
+        ],
+        "label_size_list": [
+          12,
+          16,
+          16,
+          16,
+          16,
+          9
+        ],
+        "legal_action_size_list": [
+          12,
+          16,
+          16,
+          16,
+          16,
+          108
+        ],
+        "recall_enabled_default": null,
+        "recall_reward_weight_default": null
+      },
+      "cwd": "/private/var/folders/yk/1fv5_yds50jcwg_2sm5_vz1r0000gn/T/kaiwu-uzi-historical-probes/hybrid_encoder-7b868460d431",
+      "dirty": false,
+      "errors": [
+        {
+          "message": "No module named 'agent_ppo.feature.action_mask'",
+          "name": "normal_attack_mask",
+          "traceback": "Traceback (most recent call last):\n  File \"<string>\", line 101, in <module>\nModuleNotFoundError: No module named 'agent_ppo.feature.action_mask'\n",
+          "type": "ModuleNotFoundError"
+        },
+        {
+          "message": "No module named 'agent_ppo.feature.targeting'",
+          "name": "soldier_target_order",
+          "traceback": "Traceback (most recent call last):\n  File \"<string>\", line 127, in <module>\nModuleNotFoundError: No module named 'agent_ppo.feature.targeting'\n",
+          "type": "ModuleNotFoundError"
+        }
+      ],
+      "kind": "historical_commit",
+      "label": "hybrid_encoder",
+      "ok": true,
+      "probes": {
+        "arli_mark_feature": {
+          "available": true,
+          "feature_len": 561,
+          "has_arli_mark_field": true,
+          "mark_values": [
+            {
+              "index": 0,
+              "nonzero": false,
+              "type": "own_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "index": 1,
+              "nonzero": false,
+              "type": "own_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "index": 2,
+              "nonzero": true,
+              "type": "own_minions",
+              "values": [
+                1.0,
+                1.0
+              ]
+            },
+            {
+              "index": 3,
+              "nonzero": false,
+              "type": "own_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "index": 0,
+              "nonzero": false,
+              "type": "enemy_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "index": 1,
+              "nonzero": false,
+              "type": "enemy_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "index": 2,
+              "nonzero": false,
+              "type": "enemy_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "index": 3,
+              "nonzero": false,
+              "type": "enemy_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            }
+          ]
+        },
+        "normal_attack_mask": {
+          "available": false
+        },
+        "recall_low_hp_safe": {
+          "available": true,
+          "recall_button": 9,
+          "recall_enabled_for_probe": null,
+          "recall_recover": 0.0,
+          "recall_reward_weight_for_probe": null,
+          "retreat_recover": 0.0,
+          "reward_sum": 0.0,
+          "stats": {}
+        },
+        "soldier_target_order": {
+          "available": false
+        }
+      },
+      "returncode": 0,
+      "short_commit": "7b86846",
+      "stderr": ""
+    },
+    {
+      "commit": "f5ce14ff0fe24ca892ef9ba6ede0d7cd05bfa0cc",
+      "config": {
+        "feature_dim": 561,
+        "hero_config_ids": [
+          112,
+          133,
+          199
+        ],
+        "label_size_list": [
+          12,
+          16,
+          16,
+          16,
+          16,
+          9
+        ],
+        "legal_action_size_list": [
+          12,
+          16,
+          16,
+          16,
+          16,
+          108
+        ],
+        "recall_enabled_default": null,
+        "recall_reward_weight_default": null
+      },
+      "cwd": "/private/var/folders/yk/1fv5_yds50jcwg_2sm5_vz1r0000gn/T/kaiwu-uzi-historical-probes/ppo_owned_features_rewards-f5ce14ff0fe2",
+      "dirty": false,
+      "errors": [
+        {
+          "message": "No module named 'agent_ppo.feature.action_mask'",
+          "name": "normal_attack_mask",
+          "traceback": "Traceback (most recent call last):\n  File \"<string>\", line 101, in <module>\nModuleNotFoundError: No module named 'agent_ppo.feature.action_mask'\n",
+          "type": "ModuleNotFoundError"
+        }
+      ],
+      "kind": "historical_commit",
+      "label": "ppo_owned_features_rewards",
+      "ok": true,
+      "probes": {
+        "arli_mark_feature": {
+          "available": true,
+          "feature_len": 561,
+          "has_arli_mark_field": true,
+          "mark_values": [
+            {
+              "index": 0,
+              "nonzero": false,
+              "type": "own_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "index": 1,
+              "nonzero": false,
+              "type": "own_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "index": 2,
+              "nonzero": true,
+              "type": "own_minions",
+              "values": [
+                1.0,
+                1.0
+              ]
+            },
+            {
+              "index": 3,
+              "nonzero": false,
+              "type": "own_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "index": 0,
+              "nonzero": false,
+              "type": "enemy_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "index": 1,
+              "nonzero": false,
+              "type": "enemy_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "index": 2,
+              "nonzero": false,
+              "type": "enemy_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "index": 3,
+              "nonzero": false,
+              "type": "enemy_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            }
+          ]
+        },
+        "normal_attack_mask": {
+          "available": false
+        },
+        "recall_low_hp_safe": {
+          "available": true,
+          "recall_button": 9,
+          "recall_enabled_for_probe": null,
+          "recall_recover": 0.0,
+          "recall_reward_weight_for_probe": null,
+          "retreat_recover": 0.0,
+          "reward_sum": 0.0,
+          "stats": {}
+        },
+        "soldier_target_order": {
+          "available": true,
+          "distance_order_runtime_ids": [
+            30,
+            20,
+            10
+          ],
+          "input_runtime_ids": [
+            30,
+            10,
+            20
+          ],
+          "observed_slot_runtime_ids": [
+            10,
+            20,
+            30
+          ],
+          "runtime_id_order": [
+            10,
+            20,
+            30
+          ]
+        }
+      },
+      "returncode": 0,
+      "short_commit": "f5ce14f",
+      "stderr": ""
+    },
+    {
+      "commit": "4c078290ffd51ee1738c798d286e9984b33a077a",
+      "config": {
+        "feature_dim": 561,
+        "hero_config_ids": [
+          112,
+          133,
+          199
+        ],
+        "label_size_list": [
+          12,
+          16,
+          16,
+          16,
+          16,
+          9
+        ],
+        "legal_action_size_list": [
+          12,
+          16,
+          16,
+          16,
+          16,
+          108
+        ],
+        "recall_enabled_default": null,
+        "recall_reward_weight_default": null
+      },
+      "cwd": "/private/var/folders/yk/1fv5_yds50jcwg_2sm5_vz1r0000gn/T/kaiwu-uzi-historical-probes/training_observability_masks-4c078290ffd5",
+      "dirty": false,
+      "errors": [],
+      "kind": "historical_commit",
+      "label": "training_observability_masks",
+      "ok": true,
+      "probes": {
+        "arli_mark_feature": {
+          "available": true,
+          "feature_len": 561,
+          "has_arli_mark_field": true,
+          "mark_values": [
+            {
+              "index": 0,
+              "nonzero": false,
+              "type": "own_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "index": 1,
+              "nonzero": false,
+              "type": "own_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "index": 2,
+              "nonzero": true,
+              "type": "own_minions",
+              "values": [
+                1.0,
+                1.0
+              ]
+            },
+            {
+              "index": 3,
+              "nonzero": false,
+              "type": "own_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "index": 0,
+              "nonzero": false,
+              "type": "enemy_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "index": 1,
+              "nonzero": false,
+              "type": "enemy_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "index": 2,
+              "nonzero": false,
+              "type": "enemy_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "index": 3,
+              "nonzero": false,
+              "type": "enemy_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            }
+          ]
+        },
+        "normal_attack_mask": {
+          "available": true,
+          "button3_after": 0.0,
+          "stats": {
+            "button3_entity_target_legal_cnt": 0.0,
+            "button3_legal_checked_cnt": 1.0,
+            "button3_masked_no_entity_target_cnt": 1.0,
+            "button3_no_entity_target_legal_cnt": 1.0,
+            "button3_target0_or_self_suppressed_cnt": 1.0
+          },
+          "target0_after": 0.0,
+          "target2_after": 0.0
+        },
+        "recall_low_hp_safe": {
+          "available": true,
+          "recall_button": 9,
+          "recall_enabled_for_probe": null,
+          "recall_recover": 0.0,
+          "recall_reward_weight_for_probe": null,
+          "retreat_recover": 0.0,
+          "reward_sum": 0.0,
+          "stats": {}
+        },
+        "soldier_target_order": {
+          "available": true,
+          "distance_order_runtime_ids": [
+            30,
+            20,
+            10
+          ],
+          "input_runtime_ids": [
+            30,
+            10,
+            20
+          ],
+          "observed_slot_runtime_ids": [
+            10,
+            20,
+            30
+          ],
+          "runtime_id_order": [
+            10,
+            20,
+            30
+          ]
+        }
+      },
+      "returncode": 0,
+      "short_commit": "4c07829",
+      "stderr": ""
+    },
+    {
+      "commit": "ba56882145b8dbe30eddc6a391c2ef4355de0b22",
+      "config": {
+        "feature_dim": 561,
+        "hero_config_ids": [
+          112,
+          133,
+          199
+        ],
+        "label_size_list": [
+          12,
+          16,
+          16,
+          16,
+          16,
+          9
+        ],
+        "legal_action_size_list": [
+          12,
+          16,
+          16,
+          16,
+          16,
+          108
+        ],
+        "recall_enabled_default": null,
+        "recall_reward_weight_default": null
+      },
+      "cwd": "/private/var/folders/yk/1fv5_yds50jcwg_2sm5_vz1r0000gn/T/kaiwu-uzi-historical-probes/multi_hero_curriculum-ba56882145b8",
+      "dirty": false,
+      "errors": [],
+      "kind": "historical_commit",
+      "label": "multi_hero_curriculum",
+      "ok": true,
+      "probes": {
+        "arli_mark_feature": {
+          "available": true,
+          "feature_len": 561,
+          "has_arli_mark_field": true,
+          "mark_values": [
+            {
+              "index": 0,
+              "nonzero": false,
+              "type": "own_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "index": 1,
+              "nonzero": false,
+              "type": "own_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "index": 2,
+              "nonzero": true,
+              "type": "own_minions",
+              "values": [
+                1.0,
+                1.0
+              ]
+            },
+            {
+              "index": 3,
+              "nonzero": false,
+              "type": "own_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "index": 0,
+              "nonzero": false,
+              "type": "enemy_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "index": 1,
+              "nonzero": false,
+              "type": "enemy_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "index": 2,
+              "nonzero": false,
+              "type": "enemy_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "index": 3,
+              "nonzero": false,
+              "type": "enemy_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            }
+          ]
+        },
+        "normal_attack_mask": {
+          "available": true,
+          "button3_after": 0.0,
+          "stats": {
+            "button3_entity_target_legal_cnt": 0.0,
+            "button3_legal_checked_cnt": 1.0,
+            "button3_masked_no_entity_target_cnt": 1.0,
+            "button3_no_entity_target_legal_cnt": 1.0,
+            "button3_target0_or_self_suppressed_cnt": 1.0
+          },
+          "target0_after": 0.0,
+          "target2_after": 0.0
+        },
+        "recall_low_hp_safe": {
+          "available": true,
+          "recall_button": 9,
+          "recall_enabled_for_probe": null,
+          "recall_recover": 0.0,
+          "recall_reward_weight_for_probe": null,
+          "retreat_recover": 0.0,
+          "reward_sum": 0.0,
+          "stats": {}
+        },
+        "soldier_target_order": {
+          "available": true,
+          "distance_order_runtime_ids": [
+            30,
+            20,
+            10
+          ],
+          "input_runtime_ids": [
+            30,
+            10,
+            20
+          ],
+          "observed_slot_runtime_ids": [
+            10,
+            20,
+            30
+          ],
+          "runtime_id_order": [
+            10,
+            20,
+            30
+          ]
+        }
+      },
+      "returncode": 0,
+      "short_commit": "ba56882",
+      "stderr": ""
+    },
+    {
+      "commit": "a8247749b12efd50a74e1b191c0c8f1d9afe20f3",
+      "config": {
+        "feature_dim": 561,
+        "hero_config_ids": [
+          112,
+          133,
+          199
+        ],
+        "label_size_list": [
+          12,
+          16,
+          16,
+          16,
+          16,
+          9
+        ],
+        "legal_action_size_list": [
+          12,
+          16,
+          16,
+          16,
+          16,
+          108
+        ],
+        "recall_enabled_default": null,
+        "recall_reward_weight_default": 1.0
+      },
+      "cwd": "/private/var/folders/yk/1fv5_yds50jcwg_2sm5_vz1r0000gn/T/kaiwu-uzi-historical-probes/recall_reward_shaping-a8247749b12e",
+      "dirty": false,
+      "errors": [],
+      "kind": "historical_commit",
+      "label": "recall_reward_shaping",
+      "ok": true,
+      "probes": {
+        "arli_mark_feature": {
+          "available": true,
+          "feature_len": 561,
+          "has_arli_mark_field": true,
+          "mark_values": [
+            {
+              "index": 0,
+              "nonzero": false,
+              "type": "own_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "index": 1,
+              "nonzero": false,
+              "type": "own_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "index": 2,
+              "nonzero": true,
+              "type": "own_minions",
+              "values": [
+                1.0,
+                1.0
+              ]
+            },
+            {
+              "index": 3,
+              "nonzero": false,
+              "type": "own_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "index": 0,
+              "nonzero": false,
+              "type": "enemy_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "index": 1,
+              "nonzero": false,
+              "type": "enemy_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "index": 2,
+              "nonzero": false,
+              "type": "enemy_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "index": 3,
+              "nonzero": false,
+              "type": "enemy_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            }
+          ]
+        },
+        "normal_attack_mask": {
+          "available": true,
+          "button3_after": 0.0,
+          "stats": {
+            "button3_entity_target_legal_cnt": 0.0,
+            "button3_legal_checked_cnt": 1.0,
+            "button3_masked_no_entity_target_cnt": 1.0,
+            "button3_no_entity_target_legal_cnt": 1.0,
+            "button3_target0_or_self_suppressed_cnt": 1.0
+          },
+          "target0_after": 0.0,
+          "target2_after": 0.0
+        },
+        "recall_low_hp_safe": {
+          "available": true,
+          "recall_button": 9,
+          "recall_enabled_for_probe": null,
+          "recall_recover": 0.06,
+          "recall_reward_weight_for_probe": 1.0,
+          "retreat_recover": 0.0,
+          "reward_sum": 0.06,
+          "stats": {
+            "recall_button_rate_when_needed": 1.0,
+            "recall_hold_cnt": 0.0,
+            "recall_interrupt_cnt": 0.0,
+            "recall_miss_cnt": 0.0,
+            "recall_need_cnt": 1.0,
+            "recall_start_cnt": 1.0,
+            "recall_success_cnt": 0.0,
+            "recall_unneeded_cnt": 0.0
+          }
+        },
+        "soldier_target_order": {
+          "available": true,
+          "distance_order_runtime_ids": [
+            30,
+            20,
+            10
+          ],
+          "input_runtime_ids": [
+            30,
+            10,
+            20
+          ],
+          "observed_slot_runtime_ids": [
+            10,
+            20,
+            30
+          ],
+          "runtime_id_order": [
+            10,
+            20,
+            30
+          ]
+        }
+      },
+      "returncode": 0,
+      "short_commit": "a824774",
+      "stderr": ""
+    },
+    {
+      "commit": "19fd50820bd6bfda749ed1aa5fd7dba0eb99a9cb",
+      "config": {
+        "feature_dim": 561,
+        "hero_config_ids": [
+          112,
+          133,
+          199
+        ],
+        "label_size_list": [
+          12,
+          16,
+          16,
+          16,
+          16,
+          9
+        ],
+        "legal_action_size_list": [
+          12,
+          16,
+          16,
+          16,
+          16,
+          108
+        ],
+        "recall_enabled_default": null,
+        "recall_reward_weight_default": 1.0
+      },
+      "cwd": "/private/var/folders/yk/1fv5_yds50jcwg_2sm5_vz1r0000gn/T/kaiwu-uzi-historical-probes/temporary_recall_exploration-19fd50820bd6",
+      "dirty": false,
+      "errors": [],
+      "kind": "historical_commit",
+      "label": "temporary_recall_exploration",
+      "ok": true,
+      "probes": {
+        "arli_mark_feature": {
+          "available": true,
+          "feature_len": 561,
+          "has_arli_mark_field": true,
+          "mark_values": [
+            {
+              "index": 0,
+              "nonzero": false,
+              "type": "own_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "index": 1,
+              "nonzero": false,
+              "type": "own_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "index": 2,
+              "nonzero": true,
+              "type": "own_minions",
+              "values": [
+                1.0,
+                1.0
+              ]
+            },
+            {
+              "index": 3,
+              "nonzero": false,
+              "type": "own_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "index": 0,
+              "nonzero": false,
+              "type": "enemy_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "index": 1,
+              "nonzero": false,
+              "type": "enemy_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "index": 2,
+              "nonzero": false,
+              "type": "enemy_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "index": 3,
+              "nonzero": false,
+              "type": "enemy_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            }
+          ]
+        },
+        "normal_attack_mask": {
+          "available": true,
+          "button3_after": 0.0,
+          "stats": {
+            "button3_entity_target_legal_cnt": 0.0,
+            "button3_legal_checked_cnt": 1.0,
+            "button3_masked_no_entity_target_cnt": 1.0,
+            "button3_no_entity_target_legal_cnt": 1.0,
+            "button3_target0_or_self_suppressed_cnt": 1.0
+          },
+          "target0_after": 0.0,
+          "target2_after": 0.0
+        },
+        "recall_low_hp_safe": {
+          "available": true,
+          "recall_button": 9,
+          "recall_enabled_for_probe": null,
+          "recall_recover": 0.06,
+          "recall_reward_weight_for_probe": 1.0,
+          "retreat_recover": 0.0,
+          "reward_sum": 0.06,
+          "stats": {
+            "recall_button_rate_when_needed": 1.0,
+            "recall_hold_cnt": 0.0,
+            "recall_interrupt_cnt": 0.0,
+            "recall_miss_cnt": 0.0,
+            "recall_need_cnt": 1.0,
+            "recall_start_cnt": 1.0,
+            "recall_success_cnt": 0.0,
+            "recall_unneeded_cnt": 0.0
+          }
+        },
+        "soldier_target_order": {
+          "available": true,
+          "distance_order_runtime_ids": [
+            30,
+            20,
+            10
+          ],
+          "input_runtime_ids": [
+            30,
+            10,
+            20
+          ],
+          "observed_slot_runtime_ids": [
+            10,
+            20,
+            30
+          ],
+          "runtime_id_order": [
+            10,
+            20,
+            30
+          ]
+        }
+      },
+      "returncode": 0,
+      "short_commit": "19fd508",
+      "stderr": ""
+    },
+    {
+      "commit": "3463df565fe5cca1559ddc5b9eecd61c972fe77f",
+      "config": {
+        "feature_dim": 561,
+        "hero_config_ids": [
+          112,
+          133,
+          199
+        ],
+        "label_size_list": [
+          12,
+          16,
+          16,
+          16,
+          16,
+          9
+        ],
+        "legal_action_size_list": [
+          12,
+          16,
+          16,
+          16,
+          16,
+          108
+        ],
+        "recall_enabled_default": null,
+        "recall_reward_weight_default": 1.0
+      },
+      "cwd": "/private/var/folders/yk/1fv5_yds50jcwg_2sm5_vz1r0000gn/T/kaiwu-uzi-historical-probes/recall_button_legal-3463df565fe5",
+      "dirty": false,
+      "errors": [],
+      "kind": "historical_commit",
+      "label": "recall_button_legal",
+      "ok": true,
+      "probes": {
+        "arli_mark_feature": {
+          "available": true,
+          "feature_len": 561,
+          "has_arli_mark_field": true,
+          "mark_values": [
+            {
+              "index": 0,
+              "nonzero": false,
+              "type": "own_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "index": 1,
+              "nonzero": false,
+              "type": "own_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "index": 2,
+              "nonzero": true,
+              "type": "own_minions",
+              "values": [
+                1.0,
+                1.0
+              ]
+            },
+            {
+              "index": 3,
+              "nonzero": false,
+              "type": "own_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "index": 0,
+              "nonzero": false,
+              "type": "enemy_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "index": 1,
+              "nonzero": false,
+              "type": "enemy_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "index": 2,
+              "nonzero": false,
+              "type": "enemy_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "index": 3,
+              "nonzero": false,
+              "type": "enemy_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            }
+          ]
+        },
+        "normal_attack_mask": {
+          "available": true,
+          "button3_after": 0.0,
+          "stats": {
+            "button3_entity_target_legal_cnt": 0.0,
+            "button3_legal_checked_cnt": 1.0,
+            "button3_masked_no_entity_target_cnt": 1.0,
+            "button3_no_entity_target_legal_cnt": 1.0,
+            "button3_target0_or_self_suppressed_cnt": 1.0
+          },
+          "target0_after": 0.0,
+          "target2_after": 0.0
+        },
+        "recall_low_hp_safe": {
+          "available": true,
+          "recall_button": 9,
+          "recall_enabled_for_probe": null,
+          "recall_recover": 0.06,
+          "recall_reward_weight_for_probe": 1.0,
+          "retreat_recover": 0.0,
+          "reward_sum": 0.06,
+          "stats": {
+            "recall_button_rate_when_needed": 1.0,
+            "recall_hold_cnt": 0.0,
+            "recall_interrupt_cnt": 0.0,
+            "recall_miss_cnt": 0.0,
+            "recall_need_cnt": 1.0,
+            "recall_start_cnt": 1.0,
+            "recall_success_cnt": 0.0,
+            "recall_unneeded_cnt": 0.0
+          }
+        },
+        "soldier_target_order": {
+          "available": true,
+          "distance_order_runtime_ids": [
+            30,
+            20,
+            10
+          ],
+          "input_runtime_ids": [
+            30,
+            10,
+            20
+          ],
+          "observed_slot_runtime_ids": [
+            10,
+            20,
+            30
+          ],
+          "runtime_id_order": [
+            10,
+            20,
+            30
+          ]
+        }
+      },
+      "returncode": 0,
+      "short_commit": "3463df5",
+      "stderr": ""
+    },
+    {
+      "commit": "357627acfb8149b53561e60564bedacee5005a69",
+      "config": {
+        "feature_dim": 561,
+        "hero_config_ids": [
+          112,
+          133,
+          199
+        ],
+        "label_size_list": [
+          12,
+          16,
+          16,
+          16,
+          16,
+          9
+        ],
+        "legal_action_size_list": [
+          12,
+          16,
+          16,
+          16,
+          16,
+          108
+        ],
+        "recall_enabled_default": null,
+        "recall_reward_weight_default": 1.0
+      },
+      "cwd": "/private/var/folders/yk/1fv5_yds50jcwg_2sm5_vz1r0000gn/T/kaiwu-uzi-historical-probes/recall_ignition_monitoring-357627acfb81",
+      "dirty": false,
+      "errors": [],
+      "kind": "historical_commit",
+      "label": "recall_ignition_monitoring",
+      "ok": true,
+      "probes": {
+        "arli_mark_feature": {
+          "available": true,
+          "feature_len": 561,
+          "has_arli_mark_field": true,
+          "mark_values": [
+            {
+              "index": 0,
+              "nonzero": false,
+              "type": "own_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "index": 1,
+              "nonzero": false,
+              "type": "own_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "index": 2,
+              "nonzero": true,
+              "type": "own_minions",
+              "values": [
+                1.0,
+                1.0
+              ]
+            },
+            {
+              "index": 3,
+              "nonzero": false,
+              "type": "own_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "index": 0,
+              "nonzero": false,
+              "type": "enemy_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "index": 1,
+              "nonzero": false,
+              "type": "enemy_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "index": 2,
+              "nonzero": false,
+              "type": "enemy_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "index": 3,
+              "nonzero": false,
+              "type": "enemy_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            }
+          ]
+        },
+        "normal_attack_mask": {
+          "available": true,
+          "button3_after": 0.0,
+          "stats": {
+            "button3_entity_target_legal_cnt": 0.0,
+            "button3_legal_checked_cnt": 1.0,
+            "button3_masked_no_entity_target_cnt": 1.0,
+            "button3_no_entity_target_legal_cnt": 1.0,
+            "button3_target0_or_self_suppressed_cnt": 1.0
+          },
+          "target0_after": 0.0,
+          "target2_after": 0.0
+        },
+        "recall_low_hp_safe": {
+          "available": true,
+          "recall_button": 9,
+          "recall_enabled_for_probe": null,
+          "recall_recover": 0.06,
+          "recall_reward_weight_for_probe": 1.0,
+          "retreat_recover": 0.0,
+          "reward_sum": 0.06,
+          "stats": {
+            "recall_button_rate_when_needed": 1.0,
+            "recall_hold_cnt": 0.0,
+            "recall_interrupt_cnt": 0.0,
+            "recall_interrupt_penalty_sum": 0.0,
+            "recall_miss_cnt": 0.0,
+            "recall_need_cnt": 1.0,
+            "recall_start_cnt": 1.0,
+            "recall_success_cnt": 0.0,
+            "recall_success_reward_sum": 0.0,
+            "recall_unneeded_cnt": 0.0
+          }
+        },
+        "soldier_target_order": {
+          "available": true,
+          "distance_order_runtime_ids": [
+            30,
+            20,
+            10
+          ],
+          "input_runtime_ids": [
+            30,
+            10,
+            20
+          ],
+          "observed_slot_runtime_ids": [
+            10,
+            20,
+            30
+          ],
+          "runtime_id_order": [
+            10,
+            20,
+            30
+          ]
+        }
+      },
+      "returncode": 0,
+      "short_commit": "357627a",
+      "stderr": ""
+    },
+    {
+      "commit": "840fd3eb62d011305fba26661e0976d845094e48",
+      "config": {
+        "feature_dim": 561,
+        "hero_config_ids": [
+          112,
+          133,
+          199
+        ],
+        "label_size_list": [
+          12,
+          16,
+          16,
+          16,
+          16,
+          9
+        ],
+        "legal_action_size_list": [
+          12,
+          16,
+          16,
+          16,
+          16,
+          108
+        ],
+        "recall_enabled_default": null,
+        "recall_reward_weight_default": 1.0
+      },
+      "cwd": "/private/var/folders/yk/1fv5_yds50jcwg_2sm5_vz1r0000gn/T/kaiwu-uzi-historical-probes/recall_channel_state-840fd3eb62d0",
+      "dirty": false,
+      "errors": [],
+      "kind": "historical_commit",
+      "label": "recall_channel_state",
+      "ok": true,
+      "probes": {
+        "arli_mark_feature": {
+          "available": true,
+          "feature_len": 561,
+          "has_arli_mark_field": true,
+          "mark_values": [
+            {
+              "index": 0,
+              "nonzero": false,
+              "type": "own_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "index": 1,
+              "nonzero": false,
+              "type": "own_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "index": 2,
+              "nonzero": true,
+              "type": "own_minions",
+              "values": [
+                1.0,
+                1.0
+              ]
+            },
+            {
+              "index": 3,
+              "nonzero": false,
+              "type": "own_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "index": 0,
+              "nonzero": false,
+              "type": "enemy_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "index": 1,
+              "nonzero": false,
+              "type": "enemy_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "index": 2,
+              "nonzero": false,
+              "type": "enemy_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "index": 3,
+              "nonzero": false,
+              "type": "enemy_minions",
+              "values": [
+                0.0,
+                0.0
+              ]
+            }
+          ]
+        },
+        "normal_attack_mask": {
+          "available": true,
+          "button3_after": 0.0,
+          "stats": {
+            "button3_entity_target_legal_cnt": 0.0,
+            "button3_legal_checked_cnt": 1.0,
+            "button3_masked_no_entity_target_cnt": 1.0,
+            "button3_no_entity_target_legal_cnt": 1.0,
+            "button3_target0_or_self_suppressed_cnt": 1.0
+          },
+          "target0_after": 0.0,
+          "target2_after": 0.0
+        },
+        "recall_low_hp_safe": {
+          "available": true,
+          "recall_button": 9,
+          "recall_enabled_for_probe": null,
+          "recall_recover": 0.06,
+          "recall_reward_weight_for_probe": 1.0,
+          "retreat_recover": 0.0,
+          "reward_sum": 0.06,
+          "stats": {
+            "recall_button_rate_when_needed": 1.0,
+            "recall_hold_cnt": 0.0,
+            "recall_interrupt_cnt": 0.0,
+            "recall_interrupt_penalty_sum": 0.0,
+            "recall_miss_cnt": 0.0,
+            "recall_need_cnt": 1.0,
+            "recall_start_cnt": 1.0,
+            "recall_success_cnt": 0.0,
+            "recall_success_reward_sum": 0.0,
+            "recall_unneeded_cnt": 0.0
+          }
+        },
+        "soldier_target_order": {
+          "available": true,
+          "distance_order_runtime_ids": [
+            30,
+            20,
+            10
+          ],
+          "input_runtime_ids": [
+            30,
+            10,
+            20
+          ],
+          "observed_slot_runtime_ids": [
+            10,
+            20,
+            30
+          ],
+          "runtime_id_order": [
+            10,
+            20,
+            30
+          ]
+        }
+      },
+      "returncode": 0,
+      "short_commit": "840fd3e",
+      "stderr": ""
+    }
+  ]
+}

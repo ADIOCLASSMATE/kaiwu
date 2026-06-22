@@ -1,0 +1,12 @@
+{
+  "available": true,
+  "end": "2026-06-22T03:39:56.718606Z",
+  "error_summary_path": "logs/ppo-5-1/errors.jsonl.summary.json",
+  "error_warning_entries": 0,
+  "levels": {},
+  "start": "2026-06-21T19:44:13.560669Z",
+  "status": "manual_release",
+  "summary_path": "logs/ppo-5-1/summary.json",
+  "task_id": 221084,
+  "task_name": "ppo-5-1"
+}

@@ -1,0 +1,162 @@
+{
+  "commit": "f5ce14ff0fe24ca892ef9ba6ede0d7cd05bfa0cc",
+  "config": {
+    "feature_dim": 561,
+    "hero_config_ids": [
+      112,
+      133,
+      199
+    ],
+    "label_size_list": [
+      12,
+      16,
+      16,
+      16,
+      16,
+      9
+    ],
+    "legal_action_size_list": [
+      12,
+      16,
+      16,
+      16,
+      16,
+      108
+    ],
+    "recall_enabled_default": null,
+    "recall_reward_weight_default": null
+  },
+  "cwd": "/private/var/folders/yk/1fv5_yds50jcwg_2sm5_vz1r0000gn/T/kaiwu-uzi-historical-probes/ppo_owned_features_rewards-f5ce14ff0fe2",
+  "dirty": false,
+  "errors": [
+    {
+      "message": "No module named 'agent_ppo.feature.action_mask'",
+      "name": "normal_attack_mask",
+      "traceback": "Traceback (most recent call last):\n  File \"<string>\", line 101, in <module>\nModuleNotFoundError: No module named 'agent_ppo.feature.action_mask'\n",
+      "type": "ModuleNotFoundError"
+    }
+  ],
+  "kind": "historical_commit",
+  "label": "ppo_owned_features_rewards",
+  "ok": true,
+  "probes": {
+    "arli_mark_feature": {
+      "available": true,
+      "feature_len": 561,
+      "has_arli_mark_field": true,
+      "mark_values": [
+        {
+          "index": 0,
+          "nonzero": false,
+          "type": "own_minions",
+          "values": [
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "index": 1,
+          "nonzero": false,
+          "type": "own_minions",
+          "values": [
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "index": 2,
+          "nonzero": true,
+          "type": "own_minions",
+          "values": [
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "index": 3,
+          "nonzero": false,
+          "type": "own_minions",
+          "values": [
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "index": 0,
+          "nonzero": false,
+          "type": "enemy_minions",
+          "values": [
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "index": 1,
+          "nonzero": false,
+          "type": "enemy_minions",
+          "values": [
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "index": 2,
+          "nonzero": false,
+          "type": "enemy_minions",
+          "values": [
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "index": 3,
+          "nonzero": false,
+          "type": "enemy_minions",
+          "values": [
+            0.0,
+            0.0
+          ]
+        }
+      ]
+    },
+    "normal_attack_mask": {
+      "available": false
+    },
+    "recall_low_hp_safe": {
+      "available": true,
+      "recall_button": 9,
+      "recall_enabled_for_probe": null,
+      "recall_recover": 0.0,
+      "recall_reward_weight_for_probe": null,
+      "retreat_recover": 0.0,
+      "reward_sum": 0.0,
+      "stats": {}
+    },
+    "soldier_target_order": {
+      "available": true,
+      "distance_order_runtime_ids": [
+        30,
+        20,
+        10
+      ],
+      "input_runtime_ids": [
+        30,
+        10,
+        20
+      ],
+      "observed_slot_runtime_ids": [
+        10,
+        20,
+        30
+      ],
+      "runtime_id_order": [
+        10,
+        20,
+        30
+      ]
+    }
+  },
+  "returncode": 0,
+  "short_commit": "f5ce14f",
+  "stderr": ""
+}

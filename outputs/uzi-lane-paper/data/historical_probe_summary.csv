@@ -1,0 +1,12 @@
+label,commit,kind,dirty,mask_available,button3_after,soldier_order_available,soldier_slots,recall_available,recall_recover,recall_need_cnt,arli_available,arli_has_mark_field,arli_nonzero_marks,error_count
+current_working_tree,721d426,working_tree,True,True,0.0,True,"10,20,30",True,0.06,1.0,True,True,1,0
+ppo_diy_feature_swap,436d5ad,historical_commit,False,False,,False,,True,0.0,,True,True,1,2
+hybrid_encoder,7b86846,historical_commit,False,False,,False,,True,0.0,,True,True,1,2
+ppo_owned_features_rewards,f5ce14f,historical_commit,False,False,,True,"10,20,30",True,0.0,,True,True,1,1
+training_observability_masks,4c07829,historical_commit,False,True,0.0,True,"10,20,30",True,0.0,,True,True,1,0
+multi_hero_curriculum,ba56882,historical_commit,False,True,0.0,True,"10,20,30",True,0.0,,True,True,1,0
+recall_reward_shaping,a824774,historical_commit,False,True,0.0,True,"10,20,30",True,0.06,1.0,True,True,1,0
+temporary_recall_exploration,19fd508,historical_commit,False,True,0.0,True,"10,20,30",True,0.06,1.0,True,True,1,0
+recall_button_legal,3463df5,historical_commit,False,True,0.0,True,"10,20,30",True,0.06,1.0,True,True,1,0
+recall_ignition_monitoring,357627a,historical_commit,False,True,0.0,True,"10,20,30",True,0.06,1.0,True,True,1,0
+recall_channel_state,840fd3e,historical_commit,False,True,0.0,True,"10,20,30",True,0.06,1.0,True,True,1,0

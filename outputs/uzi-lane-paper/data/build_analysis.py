@@ -102,16 +102,24 @@ def collect_run_summary() -> pd.DataFrame:
 
 
 def collect_final_run_note() -> dict:
-    path = REPO_ROOT / "logs" / "ppo-5-1-errors.jsonl.summary.json"
-    if not path.exists():
+    summary_path = REPO_ROOT / "logs" / "ppo-5-1" / "summary.json"
+    error_path = REPO_ROOT / "logs" / "ppo-5-1" / "errors.jsonl.summary.json"
+    legacy_error_path = REPO_ROOT / "logs" / "ppo-5-1-errors.jsonl.summary.json"
+    if not summary_path.exists() and not error_path.exists() and not legacy_error_path.exists():
         return {"available": False}
-    data = json.loads(path.read_text(encoding="utf-8"))
+    data = json.loads(error_path.read_text(encoding="utf-8")) if error_path.exists() else (
+        json.loads(legacy_error_path.read_text(encoding="utf-8")) if legacy_error_path.exists() else {}
+    )
+    summary = json.loads(summary_path.read_text(encoding="utf-8")) if summary_path.exists() else {}
     return {
         "available": True,
-        "task_id": data.get("task_id"),
-        "task_name": data.get("task_name"),
-        "start": data.get("start"),
-        "end": data.get("end"),
+        "task_id": summary.get("task_id", data.get("task_id")),
+        "task_name": summary.get("task_name", data.get("task_name")),
+        "status": summary.get("task_status"),
+        "start": summary.get("time_range", {}).get("start", data.get("start")),
+        "end": summary.get("time_range", {}).get("end", data.get("end")),
+        "summary_path": str(summary_path.relative_to(REPO_ROOT)) if summary_path.exists() else None,
+        "error_summary_path": str((error_path if error_path.exists() else legacy_error_path).relative_to(REPO_ROOT)),
         "error_warning_entries": data.get("entries"),
         "levels": data.get("levels"),
     }
@@ -523,7 +531,6 @@ def write_latex_tables(run_df: pd.DataFrame, probe_df: pd.DataFrame) -> None:
             "action_button_9",
         ]
     ].tail(8)
-    rows.append("% Auto-generated table rows.")
     for _, row in selected.iterrows():
         def fmt(value, digits=2):
             return "--" if pd.isna(value) else f"{float(value):.{digits}f}"
@@ -542,7 +549,7 @@ def write_latex_tables(run_df: pd.DataFrame, probe_df: pd.DataFrame) -> None:
     (DATA_DIR / "ppo_table_rows.tex").write_text("\n".join(rows) + "\n", encoding="utf-8")
 
     if not probe_df.empty:
-        probe_rows = ["% Auto-generated probe table rows."]
+        probe_rows = []
         for _, row in probe_df.tail(7).iterrows():
             mask = "yes" if bool(row.get("mask_available")) and float(row.get("button3_after") or 0) == 0.0 else "no"
             soldier = row.get("soldier_slots") or "--"
