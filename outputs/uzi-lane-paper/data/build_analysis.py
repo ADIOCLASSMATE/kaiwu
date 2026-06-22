@@ -13,6 +13,7 @@ import pandas as pd
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import landscape, letter
 from reportlab.lib.units import inch
+from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 
 
@@ -20,6 +21,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 OUT_ROOT = REPO_ROOT / "outputs" / "uzi-lane-paper"
 DATA_DIR = OUT_ROOT / "data"
 FIG_DIR = OUT_ROOT / "figures"
+AI_DIR = OUT_ROOT / "generated-components"
 PROBE_RESULTS = OUT_ROOT / "probes" / "results" / "historical_probe_results.json"
 
 PALETTE = {
@@ -376,62 +378,417 @@ def create_recall_diagnostics(run_df: pd.DataFrame, probe_df: pd.DataFrame) -> N
     c.save()
 
 
+def _draw_academic_header(c: canvas.Canvas, title: str, subtitle: str, w: float, h: float) -> None:
+    c.setFillColor(colors.white)
+    c.rect(0, 0, w, h, fill=1, stroke=0)
+    c.setFillColor(PALETTE["red"])
+    c.setFont("Helvetica-Bold", 15)
+    c.drawString(0.28 * inch, h - 0.35 * inch, title)
+    c.setFillColor(PALETTE["gray"])
+    c.setFont("Helvetica", 7.6)
+    c.drawString(0.29 * inch, h - 0.53 * inch, subtitle)
+
+
+def _draw_image_cover(c: canvas.Canvas, path: Path, x: float, y: float, w: float, h: float) -> bool:
+    if not path.exists():
+        return False
+    c.drawImage(
+        ImageReader(str(path)),
+        x,
+        y,
+        width=w,
+        height=h,
+        preserveAspectRatio=True,
+        anchor="c",
+        mask="auto",
+    )
+    return True
+
+
+def _soft_white(c: canvas.Canvas, x: float, y: float, w: float, h: float, alpha: float = 0.9, radius: float = 7) -> None:
+    c.saveState()
+    c.setFillAlpha(alpha)
+    c.setStrokeAlpha(0.9)
+    c.setFillColor(colors.white)
+    c.setStrokeColor(colors.HexColor("#D7DEE4"))
+    c.roundRect(x, y, w, h, radius, fill=1, stroke=1)
+    c.restoreState()
+
+
+def _round_box(
+    c: canvas.Canvas,
+    x: float,
+    y: float,
+    w: float,
+    h: float,
+    label: str,
+    fill=colors.white,
+    stroke=PALETTE["ink"],
+    font_size: float = 7.6,
+    bold: bool = True,
+    radius: float = 5,
+    dash: tuple[int, int] | None = None,
+) -> None:
+    c.setFillColor(fill)
+    c.setStrokeColor(stroke)
+    c.setLineWidth(1.05)
+    if dash:
+        c.setDash(*dash)
+    c.roundRect(x, y, w, h, radius, fill=1, stroke=1)
+    if dash:
+        c.setDash()
+    c.setFillColor(PALETTE["ink"])
+    c.setFont("Helvetica-Bold" if bold else "Helvetica", font_size)
+    lines = label.split("\n")
+    line_h = font_size + 1.5
+    start = y + h / 2 + line_h * (len(lines) - 1) / 2 - font_size / 2
+    for i, line in enumerate(lines):
+        c.drawCentredString(x + w / 2, start - i * line_h, line)
+
+
+def _arrow(c: canvas.Canvas, x1: float, y1: float, x2: float, y2: float, color=PALETTE["ink"], width=1.15) -> None:
+    c.setStrokeColor(color)
+    c.setFillColor(color)
+    c.setLineWidth(width)
+    c.line(x1, y1, x2, y2)
+    angle = math.atan2(y2 - y1, x2 - x1)
+    head = 6.5
+    for delta in (0.48, -0.48):
+        c.line(x2, y2, x2 - head * math.cos(angle + delta), y2 - head * math.sin(angle + delta))
+
+
+def _callout(c: canvas.Canvas, text: str, x: float, y: float, w: float, color=PALETTE["ink"]) -> None:
+    c.setFillColor(color)
+    c.setFont("Helvetica", 6.8)
+    words = text.split()
+    line = ""
+    yy = y
+    max_chars = max(12, int(w / 3.2))
+    for word in words:
+        probe = word if not line else line + " " + word
+        if len(probe) > max_chars:
+            c.drawString(x, yy, line)
+            yy -= 8
+            line = word
+        else:
+            line = probe
+    if line:
+        c.drawString(x, yy, line)
+
+
+def _tag(c: canvas.Canvas, text: str, x: float, y: float, fill, stroke=None) -> None:
+    c.setFont("Helvetica-Bold", 6.5)
+    width = c.stringWidth(text, "Helvetica-Bold", 6.5) + 10
+    c.setFillColor(fill)
+    c.setStrokeColor(stroke or fill)
+    c.roundRect(x, y, width, 13, 5, fill=1, stroke=1)
+    c.setFillColor(colors.white)
+    c.drawCentredString(x + width / 2, y + 4, text)
+
+
+def _draw_cute_icon(c: canvas.Canvas, kind: str, x: float, y: float, scale: float = 1.0, enemy: bool = False) -> None:
+    """Draw small 2D icons for game entities. (x, y) is icon center."""
+    if kind == "hero":
+        main = PALETTE["red"] if enemy else PALETTE["teal"]
+        c.setFillColor(colors.whitesmoke)
+        c.setStrokeColor(main)
+        c.setLineWidth(1.0)
+        c.circle(x, y + 7 * scale, 9 * scale, fill=1, stroke=1)
+        c.setFillColor(main)
+        c.circle(x - 3 * scale, y + 9 * scale, 1.2 * scale, fill=1, stroke=0)
+        c.circle(x + 3 * scale, y + 9 * scale, 1.2 * scale, fill=1, stroke=0)
+        c.setStrokeColor(main)
+        c.line(x - 3 * scale, y + 4 * scale, x + 3 * scale, y + 4 * scale)
+        c.setFillColor(main)
+        c.roundRect(x - 8 * scale, y - 12 * scale, 16 * scale, 12 * scale, 4 * scale, fill=1, stroke=0)
+    elif kind == "minion":
+        main = PALETTE["red"] if enemy else PALETTE["green"]
+        c.setFillColor(colors.whitesmoke)
+        c.setStrokeColor(main)
+        c.setLineWidth(0.9)
+        c.circle(x, y + 4 * scale, 6 * scale, fill=1, stroke=1)
+        c.setFillColor(main)
+        c.rect(x - 7 * scale, y + 6 * scale, 14 * scale, 4 * scale, fill=1, stroke=0)
+        c.roundRect(x - 6 * scale, y - 8 * scale, 12 * scale, 9 * scale, 3 * scale, fill=1, stroke=0)
+    elif kind == "tower":
+        main = PALETTE["red"] if enemy else PALETTE["navy"]
+        c.setFillColor(colors.HexColor("#EEF2F4"))
+        c.setStrokeColor(main)
+        c.setLineWidth(1.0)
+        c.rect(x - 9 * scale, y - 12 * scale, 18 * scale, 22 * scale, fill=1, stroke=1)
+        for dx in (-8, -2, 4):
+            c.rect(x + dx * scale, y + 10 * scale, 5 * scale, 5 * scale, fill=1, stroke=1)
+        c.setFillColor(main)
+        c.roundRect(x - 4 * scale, y - 12 * scale, 8 * scale, 10 * scale, 3 * scale, fill=1, stroke=0)
+    elif kind == "bullet":
+        c.setFillColor(PALETTE["gold"])
+        c.setStrokeColor(PALETTE["gold"])
+        p = c.beginPath()
+        p.moveTo(x + 10 * scale, y)
+        p.lineTo(x - 3 * scale, y + 6 * scale)
+        p.lineTo(x - 8 * scale, y)
+        p.lineTo(x - 3 * scale, y - 6 * scale)
+        p.close()
+        c.drawPath(p, fill=1, stroke=0)
+        c.setStrokeColor(PALETTE["gold"])
+        c.line(x - 11 * scale, y, x - 18 * scale, y)
+    elif kind == "cake":
+        c.setFillColor(colors.HexColor("#57B7FF"))
+        c.setStrokeColor(PALETTE["navy"])
+        p = c.beginPath()
+        p.moveTo(x, y + 10 * scale)
+        p.lineTo(x + 10 * scale, y)
+        p.lineTo(x, y - 10 * scale)
+        p.lineTo(x - 10 * scale, y)
+        p.close()
+        c.drawPath(p, fill=1, stroke=1)
+        c.setStrokeColor(colors.white)
+        c.line(x - 4 * scale, y, x + 4 * scale, y)
+        c.line(x, y - 4 * scale, x, y + 4 * scale)
+    elif kind == "monster":
+        c.setFillColor(colors.HexColor("#8E74B8"))
+        c.setStrokeColor(PALETTE["purple"])
+        c.roundRect(x - 10 * scale, y - 8 * scale, 20 * scale, 16 * scale, 7 * scale, fill=1, stroke=1)
+        c.setFillColor(colors.white)
+        c.circle(x - 4 * scale, y + 2 * scale, 1.4 * scale, fill=1, stroke=0)
+        c.circle(x + 4 * scale, y + 2 * scale, 1.4 * scale, fill=1, stroke=0)
+
+
+def create_feature_pipeline() -> None:
+    path = FIG_DIR / "feature_pipeline.pdf"
+    w, h = 7.2 * inch, 3.35 * inch
+    c = canvas.Canvas(str(path), pagesize=(w, h))
+    c.setTitle("Feature pipeline")
+    if not _draw_image_cover(c, AI_DIR / "feature_processing_ai.png", 0, 0, w, h):
+        _draw_academic_header(
+            c,
+            "Input feature processing",
+            "Raw frame state is canonicalized into typed entity tokens, global context, and button-aware legal targets.",
+            w,
+            h,
+        )
+
+    _soft_white(c, 0.18 * inch, 2.77 * inch, 3.9 * inch, 0.38 * inch, 0.93, 9)
+    c.setFillColor(PALETTE["red"])
+    c.setFont("Helvetica-Bold", 14)
+    c.drawString(0.3 * inch, 3.0 * inch, "Input feature processing")
+    c.setFillColor(PALETTE["gray"])
+    c.setFont("Helvetica", 6.9)
+    c.drawString(0.31 * inch, 2.86 * inch, "Frame state -> canonical tokens -> target slots -> 561-dim policy input")
+
+    _soft_white(c, 4.92 * inch, 0.55 * inch, 1.95 * inch, 1.96 * inch, 0.9, 10)
+    c.setFillColor(PALETTE["ink"])
+    c.setFont("Helvetica-Bold", 8.2)
+    c.drawString(5.08 * inch, 2.32 * inch, "Token schema")
+    rows = [
+        ("hero", "2 x 124"),
+        ("tower", "2 x 17"),
+        ("minion", "8 x 22"),
+        ("monster", "1 x 8"),
+        ("bullet", "4 x 16"),
+        ("cake", "2 x 6"),
+        ("global", "19"),
+    ]
+    c.setFont("Helvetica", 6.7)
+    for i, (name, dim) in enumerate(rows):
+        yy = 2.14 * inch - i * 0.19 * inch
+        c.setFillColor(colors.HexColor("#EEF7F6") if i % 2 == 0 else colors.white)
+        c.rect(5.07 * inch, yy - 0.04 * inch, 1.48 * inch, 0.13 * inch, fill=1, stroke=0)
+        c.setFillColor(PALETTE["ink"])
+        c.drawString(5.12 * inch, yy, name)
+        c.drawRightString(6.48 * inch, yy, dim)
+
+    _round_box(c, 5.08 * inch, 0.70 * inch, 1.50 * inch, 0.25 * inch, "542 token + 19 global = 561", fill=colors.HexColor("#FFF7DF"), stroke=PALETTE["gold"], font_size=6.4)
+    _round_box(c, 4.95 * inch, 2.60 * inch, 1.92 * inch, 0.32 * inch, "Soldier1-4: nearest visible, then runtime-id order", fill=colors.white, stroke=PALETTE["red"], font_size=6.1)
+    _round_box(c, 2.98 * inch, 0.26 * inch, 2.02 * inch, 0.33 * inch, "exists is padding; visible/alive/time-since-seen are features", fill=colors.white, stroke=PALETTE["teal"], font_size=5.9)
+    c.save()
+
+
 def create_architecture() -> None:
     path = FIG_DIR / "architecture.pdf"
-    c = canvas.Canvas(str(path), pagesize=(7.0 * inch, 2.8 * inch))
-    c.setTitle("Architecture")
-    c.setFont("Helvetica-Bold", 13)
+    w, h = 7.2 * inch, 3.45 * inch
+    c = canvas.Canvas(str(path), pagesize=(w, h))
+    c.setTitle("Uzi PPO architecture")
+    if not _draw_image_cover(c, AI_DIR / "policy_architecture_ai.png", 0, 0, w, h):
+        _draw_academic_header(
+            c,
+            "Uzi policy architecture",
+            "A raw MLP preserves dense fields while a small token encoder repairs entity and target semantics.",
+            w,
+            h,
+        )
+    else:
+        _soft_white(c, 0.18 * inch, 2.91 * inch, 4.25 * inch, 0.37 * inch, 0.93, 9)
+        c.setFillColor(PALETTE["red"])
+        c.setFont("Helvetica-Bold", 14)
+        c.drawString(0.3 * inch, 3.14 * inch, "Uzi policy architecture")
+        c.setFillColor(PALETTE["gray"])
+        c.setFont("Helvetica", 6.9)
+        c.drawString(0.31 * inch, 3.00 * inch, "Exact flow from agent_ppo/model/model.py, with generated icons as visual components")
+
+    _soft_white(c, 0.24 * inch, 0.38 * inch, 6.82 * inch, 2.48 * inch, 0.84, 10)
+
+    input_x, input_y, input_w, input_h = 0.28 * inch, 0.58 * inch, 1.08 * inch, 2.28 * inch
+    _round_box(c, input_x, input_y, input_w, input_h, "", fill=colors.HexColor("#EDEDED"), stroke=PALETTE["ink"])
+    c.setFont("Helvetica-Bold", 8.3)
     c.setFillColor(PALETTE["ink"])
-    c.drawString(0.35 * inch, 2.45 * inch, "Uzi PPO architecture")
-
-    boxes = [
-        (0.35, 1.55, 1.05, 0.45, "Entity tokens", PALETTE["teal"]),
-        (0.35, 0.78, 1.05, 0.45, "Global state", PALETTE["green"]),
-        (1.75, 1.15, 1.2, 0.55, "Hybrid encoder\\nMLP + tokens", PALETTE["navy"]),
-        (3.25, 1.15, 0.95, 0.55, "LSTM\\nresidual", PALETTE["purple"]),
-        (4.55, 1.45, 1.05, 0.45, "Button head", PALETTE["gold"]),
-        (4.55, 0.75, 1.05, 0.45, "Move/skill\\nheads", PALETTE["gold"]),
-        (5.9, 1.1, 0.8, 0.65, "Target\\npointer", PALETTE["red"]),
-    ]
-
-    for bx, by, bw, bh, label, color in boxes:
-        x, y, w, h = bx * inch, by * inch, bw * inch, bh * inch
-        c.setFillColor(colors.white)
-        c.setStrokeColor(color)
-        c.setLineWidth(1.4)
-        c.roundRect(x, y, w, h, 4, fill=1, stroke=1)
-        c.setFillColor(PALETTE["ink"])
-        c.setFont("Helvetica-Bold", 7.5)
-        lines = label.split("\\n")
-        for i, line in enumerate(lines):
-            c.drawCentredString(x + w / 2, y + h / 2 + (len(lines) - 1 - 2 * i) * 4, line)
-
-    def arrow(x1, y1, x2, y2, color=PALETTE["gray"]):
-        c.setStrokeColor(color)
-        c.setFillColor(color)
-        c.setLineWidth(1.1)
-        c.line(x1 * inch, y1 * inch, x2 * inch, y2 * inch)
-        ang = math.atan2(y2 - y1, x2 - x1)
-        ah = 0.06
-        for delta in (2.6, -2.6):
-            c.line(
-                x2 * inch,
-                y2 * inch,
-                (x2 - ah * math.cos(ang + delta)) * inch,
-                (y2 - ah * math.sin(ang + delta)) * inch,
-            )
-
-    arrow(1.4, 1.78, 1.75, 1.45)
-    arrow(1.4, 1.0, 1.75, 1.35)
-    arrow(2.95, 1.42, 3.25, 1.42)
-    arrow(4.2, 1.42, 4.55, 1.67)
-    arrow(4.2, 1.35, 4.55, 0.98)
-    arrow(5.6, 1.67, 5.9, 1.43)
-    arrow(1.0, 1.55, 5.9, 1.2, PALETTE["light_gray"])
-
-    c.setFont("Helvetica", 7.4)
+    c.drawCentredString(input_x + input_w / 2, input_y + input_h - 16, "Feature vector")
+    _tag(c, "561 dims", input_x + 13, input_y + input_h - 36, PALETTE["navy"])
+    for i, (kind, enemy) in enumerate([("hero", False), ("hero", True), ("tower", False), ("minion", True), ("bullet", False), ("cake", False)]):
+        _draw_cute_icon(c, kind, input_x + 23 + (i % 2) * 30, input_y + 124 - (i // 2) * 42, 0.55, enemy=enemy)
+    c.setFont("Helvetica", 6.5)
     c.setFillColor(PALETTE["gray"])
-    c.drawString(0.35 * inch, 0.35 * inch, "Target logits are conditioned on the selected button, aligning actions with entity slots.")
+    c.drawCentredString(input_x + input_w / 2, input_y + 16, "19 tokens + global")
+
+    raw_x = 1.72 * inch
+    _round_box(c, raw_x, 2.18 * inch, 1.08 * inch, 0.44 * inch, "Raw MLP\n561 -> 256", fill=colors.HexColor("#F7F7F7"), stroke=PALETTE["gray"])
+    _round_box(c, raw_x, 0.81 * inch, 1.08 * inch, 0.44 * inch, "Type-shared\nprojection", fill=colors.HexColor("#E9F5F2"), stroke=PALETTE["teal"])
+    _round_box(c, raw_x, 1.48 * inch, 1.08 * inch, 0.36 * inch, "Global MLP\n19 -> 64", fill=colors.HexColor("#EEF2FA"), stroke=PALETTE["navy"])
+    _arrow(c, input_x + input_w + 10, 2.4 * inch, raw_x - 10, 2.4 * inch, PALETTE["gray"])
+    _arrow(c, input_x + input_w + 10, 1.03 * inch, raw_x - 10, 1.03 * inch, PALETTE["gray"])
+    _arrow(c, input_x + input_w + 10, 1.66 * inch, raw_x - 10, 1.66 * inch, PALETTE["gray"])
+
+    attn_x, attn_y, attn_w, attn_h = 3.08 * inch, 0.58 * inch, 1.48 * inch, 2.28 * inch
+    _round_box(c, attn_x, attn_y, attn_w, attn_h, "", fill=colors.HexColor("#F7D7D6"), stroke=PALETTE["red"])
+    c.setFont("Helvetica-Bold", 8.2)
+    c.setFillColor(PALETTE["ink"])
+    c.drawCentredString(attn_x + attn_w / 2, attn_y + attn_h - 16, "Token encoder")
+    _round_box(c, attn_x + 18, attn_y + attn_h - 44, attn_w - 36, 17, "2 register tokens", fill=colors.white, stroke=PALETTE["gray"], font_size=6.3)
+    _round_box(c, attn_x + 18, attn_y + 100, attn_w - 36, 22, "AdaLN attention", fill=colors.HexColor("#DDEFF7"), stroke=PALETTE["navy"], font_size=6.5)
+    _round_box(c, attn_x + 18, attn_y + 70, attn_w - 36, 22, "FFN + residual", fill=colors.HexColor("#DDEFF7"), stroke=PALETTE["navy"], font_size=6.5)
+    _round_box(c, attn_x + 18, attn_y + 38, attn_w - 36, 22, "repeat x2", fill=colors.white, stroke=PALETTE["gray"], font_size=6.5)
+    _round_box(c, attn_x + 18, attn_y + 11, attn_w - 36, 18, "exists -> key mask", fill=colors.HexColor("#FFF7DF"), stroke=PALETTE["gold"], font_size=6.1)
+    _arrow(c, raw_x + 1.08 * inch + 10, 1.03 * inch, attn_x - 12, 1.43 * inch, PALETTE["gray"])
+    _arrow(c, raw_x + 1.08 * inch + 10, 1.66 * inch, attn_x - 12, 1.43 * inch, PALETTE["gray"])
+
+    fuse_x = 4.88 * inch
+    _round_box(c, fuse_x, 1.92 * inch, 1.05 * inch, 0.43 * inch, "Residual fuse\nraw + 0.05 token", fill=colors.HexColor("#F7F7F7"), stroke=PALETTE["ink"])
+    _round_box(c, fuse_x, 1.18 * inch, 1.05 * inch, 0.43 * inch, "LSTM residual\n512, T=16", fill=colors.HexColor("#EFE8F7"), stroke=PALETTE["purple"])
+    _arrow(c, raw_x + 1.08 * inch + 10, 2.4 * inch, fuse_x - 12, 2.13 * inch, PALETTE["gray"])
+    _arrow(c, attn_x + attn_w + 10, 1.62 * inch, fuse_x - 12, 2.06 * inch, PALETTE["gray"])
+    _arrow(c, fuse_x + 0.52 * inch, 1.92 * inch, fuse_x + 0.52 * inch, 1.61 * inch, PALETTE["gray"])
+
+    out_x = 6.22 * inch
+    out_specs = [
+        (2.40, "button\n12", PALETTE["gold"]),
+        (1.96, "move / skill\n16 x 4", PALETTE["gold"]),
+        (1.35, "target pointer\nbutton -> 9", PALETTE["red"]),
+        (0.80, "value\ncritic", PALETTE["teal"]),
+    ]
+    trunk_x = out_x - 0.18 * inch
+    _arrow(c, fuse_x + 1.05 * inch + 8, 1.40 * inch, trunk_x, 1.40 * inch, PALETTE["gray"], width=1.0)
+    c.setStrokeColor(PALETTE["gray"])
+    c.setLineWidth(1.0)
+    c.line(trunk_x, 0.95 * inch, trunk_x, 2.55 * inch)
+    for yy, label, col in out_specs:
+        _round_box(c, out_x, yy * inch, 0.72 * inch, 0.31 * inch, label, fill=colors.white, stroke=col, font_size=6.1)
+        _arrow(c, trunk_x, (yy + 0.15) * inch, out_x - 9, (yy + 0.15) * inch, PALETTE["gray"], width=0.9)
+
+    c.setDash(3, 3)
+    _arrow(c, attn_x + attn_w, 1.12 * inch, out_x - 10, 1.50 * inch, PALETTE["red"], width=0.8)
+    c.setDash()
+    c.setDash(3, 3)
+    c.setStrokeColor(PALETTE["red"])
+    c.roundRect(5.97 * inch, 1.14 * inch, 1.13 * inch, 0.67 * inch, 7, fill=0, stroke=1)
+    c.setDash()
+    _callout(c, "Target logits are gathered for the selected button during PPO and during sampling.", 5.94 * inch, 0.47 * inch, 1.1 * inch, PALETTE["red"])
+    _callout(c, "Action mask: Button3 cannot choose None/Self; Button9 recall is disabled in the final model.", 3.02 * inch, 0.26 * inch, 2.2 * inch, PALETTE["gray"])
+    c.save()
+
+
+def create_training_curriculum() -> None:
+    path = FIG_DIR / "training_curriculum.pdf"
+    w, h = 7.2 * inch, 3.15 * inch
+    c = canvas.Canvas(str(path), pagesize=(w, h))
+    c.setTitle("Training curriculum")
+    if not _draw_image_cover(c, AI_DIR / "training_curriculum_ai.png", 0, 0, w, h):
+        _draw_academic_header(
+            c,
+            "Three-stage training strategy",
+            "The submission policy was shaped from basic movement to aggressive laning and finally efficient win conversion.",
+            w,
+            h,
+        )
+    else:
+        _soft_white(c, 0.18 * inch, 2.60 * inch, 4.1 * inch, 0.37 * inch, 0.93, 9)
+        c.setFillColor(PALETTE["red"])
+        c.setFont("Helvetica-Bold", 14)
+        c.drawString(0.3 * inch, 2.83 * inch, "Three-stage training strategy")
+        c.setFillColor(PALETTE["gray"])
+        c.setFont("Helvetica", 6.9)
+        c.drawString(0.31 * inch, 2.69 * inch, "Basic movement -> lane aggression -> efficient win conversion")
+
+    base_y = 0.62 * inch
+    col_w = 1.75 * inch
+    xs = [0.38 * inch, 2.75 * inch, 5.08 * inch]
+    stage = [
+        (
+            "Stage I",
+            "Basic control",
+            ["walk to lane", "avoid idle", "stay observable", "safe retreat"],
+            PALETTE["teal"],
+            ["lane_progress", "lane_presence", "idle penalty"],
+        ),
+        (
+            "Stage II",
+            "Lane aggression",
+            ["last-hit focus", "safe trades", "valid targets", "tower windows"],
+            PALETTE["red"],
+            ["target pointer", "Button3 mask", "tower_attack"],
+        ),
+        (
+            "Stage III",
+            "Win conversion",
+            ["multi-hero mix", "self-play/common-AI", "disable recall", "submit ppo-5-1"],
+            PALETTE["gold"],
+            ["96k learner steps", "20.5k episodes", "Rank #3"],
+        ),
+    ]
+    for i, (tag, title, bullets, color, notes) in enumerate(stage):
+        x = xs[i]
+        _round_box(c, x, base_y, col_w, 1.78 * inch, "", fill=colors.HexColor("#F8F8F8"), stroke=colors.HexColor("#C7CCD1"))
+        _tag(c, tag, x + 12, base_y + 1.55 * inch, color)
+        c.setFillColor(PALETTE["ink"])
+        c.setFont("Helvetica-Bold", 9.4)
+        c.drawString(x + 12, base_y + 1.36 * inch, title)
+        for j, bullet_text in enumerate(bullets):
+            yy = base_y + 1.12 * inch - j * 0.22 * inch
+            c.setFillColor(color)
+            c.circle(x + 16, yy + 2, 2.4, fill=1, stroke=0)
+            c.setFillColor(PALETTE["ink"])
+            c.setFont("Helvetica", 6.9)
+            c.drawString(x + 24, yy, bullet_text)
+        for j, note in enumerate(notes):
+            _round_box(
+                c,
+                x + 12 + (j % 2) * 0.75 * inch,
+                base_y + 0.17 * inch - (j // 2) * 0.21 * inch,
+                0.66 * inch,
+                0.16 * inch,
+                note,
+                fill=colors.white,
+                stroke=color,
+                font_size=4.9,
+                bold=False,
+                radius=3,
+            )
+        if i < 2:
+            _arrow(c, x + col_w + 14, base_y + 0.96 * inch, xs[i + 1] - 15, base_y + 0.96 * inch, PALETTE["gray"], width=1.2)
+
+    c.setStrokeColor(PALETTE["navy"])
+    c.setLineWidth(1.1)
+    c.line(0.52 * inch, 0.42 * inch, 6.75 * inch, 0.42 * inch)
+    for x, label in [
+        (0.62 * inch, "feature migration"),
+        (2.86 * inch, "target semantics fixed"),
+        (5.05 * inch, "final monitor: 68.8% WR"),
+        (6.25 * inch, "leaderboard: 131/67"),
+    ]:
+        c.setFillColor(PALETTE["navy"])
+        c.circle(x, 0.42 * inch, 3, fill=1, stroke=0)
+        c.setFont("Helvetica", 6.2)
+        c.setFillColor(PALETTE["gray"])
+        c.drawCentredString(x, 0.24 * inch, label)
     c.save()
 
 
@@ -577,7 +934,9 @@ def main() -> None:
     write_latex_tables(run_df, probes)
     create_training_progress(run_df)
     create_lane_pressure(run_df)
+    create_feature_pipeline()
     create_architecture()
+    create_training_curriculum()
     create_leaderboard_card()
     create_recall_diagnostics(run_df, probes)
     create_probe_matrix(probes)

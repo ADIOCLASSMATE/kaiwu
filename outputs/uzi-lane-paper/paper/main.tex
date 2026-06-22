@@ -52,8 +52,15 @@ Our contributions are:
 
 \begin{figure}[t]
   \centering
-  \includegraphics[width=0.86\linewidth]{architecture.pdf}
-  \caption{The Uzi policy uses structured entity tokens and global state, fuses them with a raw MLP pathway, applies an LSTM residual, and predicts multi-discrete actions. The target logits are conditioned on the selected top-level button, so target slots are interpreted in the same context as the chosen action.}
+  \includegraphics[width=\linewidth]{feature_pipeline.pdf}
+  \caption{Input feature processing. The environment frame is canonicalized into typed entity tokens, global context, target slots, and button-aware legal masks. The cake/rune icons sit behind the two outer towers, matching the 1v1 lane layout used by the feature builder.}
+  \label{fig:features}
+\end{figure}
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\linewidth]{architecture.pdf}
+  \caption{The Uzi policy uses structured entity tokens and global state, fuses them with a raw MLP pathway, applies an LSTM residual, and predicts multi-discrete actions. The target logits are conditioned on the selected top-level button, so target slots are interpreted in the same context as the chosen action. Generated 2D components provide visual icons; the module flow is drawn from the actual code path.}
   \label{fig:architecture}
 \end{figure}
 
@@ -71,7 +78,7 @@ We evaluate evidence at three levels. First, the course leaderboard is the exter
 
 \subsection{Structured observation design}
 
-The final feature vector is 561-dimensional. Its main block is a fixed set of entity tokens:
+Figure~\ref{fig:features} shows the feature pipeline. The final feature vector is 561-dimensional. Its main block is a fixed set of entity tokens:
 main hero, enemy hero, own and enemy outer towers, four own minions, four enemy minions, one monster, four bullets, and two cakes. A global block stores scalar context such as retreat or recall state. Each token begins with an \texttt{exists} bit used only for padding. Visibility, alive state, time since seen, hero identity, skill state, attack-target relations, bullets, and selected hero-specific mechanics are ordinary features rather than padding gates.
 
 Two details mattered in practice. First, Soldier1--4 target slots are not arbitrary minion order. Environment probes showed that the correct rule is to select visible alive enemy soldiers, choose the nearest four, and then order the selected set by ascending runtime id. This ordering is shared by feature construction, reward target resolution, and target-pointer slots. Second, Gongsun Li has mark state that appears not only on heroes but also on minions. The probe archive observed mark \texttt{19900} with layers 0--3, so the final minion token includes an Arli mark presence/layer pair. This made the failure diagnosable even though it did not fully solve her.
@@ -99,6 +106,13 @@ where advantages are computed in the platform workflow using generalized-advanta
 The reward is target-first. It combines zero-sum differences in tower HP, hero HP trades, kills, money, and experience with non-zero-sum action and lane terms: lane progress, lane presence, retreat recovery, last-hit events, last-hit focus, tower-attack action reward, low-health danger penalty, out-of-range attack penalty, invalid normal-attack penalty, no-op opportunity penalty, idle penalty, and terminal win quality. We intentionally keep action-level shaping small. It should break ties and remove pathological behavior, not dominate tower and kill objectives.
 
 The training workflow cycles heroes 112, 133, and 199 across both camps and dynamically mixes self-play with common AI opponents. If the policy is weak against common AI, the workflow shifts more training episodes toward common AI; if it starts winning, it restores more self-play. This curriculum kept the policy from overfitting only to its current self while still letting aggressive lane patterns sharpen through mirror play.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\linewidth]{training_curriculum.pdf}
+  \caption{Training curriculum. We first stabilized lane movement and anti-idle behavior, then strengthened target semantics and lane aggression, and finally simplified the submitted policy around efficient win conversion after recall proved unreliable.}
+  \label{fig:curriculum}
+\end{figure}
 
 \section{Results}
 
