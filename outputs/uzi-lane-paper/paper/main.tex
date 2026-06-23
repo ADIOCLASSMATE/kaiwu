@@ -1,8 +1,18 @@
 \documentclass{article}
 
 \usepackage[main, final]{neurips_2026}
-\usepackage[utf8]{inputenc}
-\usepackage[T1]{fontenc}
+\usepackage{iftex}
+\ifPDFTeX
+  \usepackage[utf8]{inputenc}
+  \usepackage[T1]{fontenc}
+  \usepackage{CJKutf8}
+  \AtBeginDocument{\begin{CJK*}{UTF8}{gbsn}}
+  \AtEndDocument{\end{CJK*}}
+\else
+  \usepackage{fontspec}
+  \usepackage{xeCJK}
+  \setCJKmainfont{Songti SC}
+\fi
 \usepackage{hyperref}
 \usepackage{url}
 \usepackage{booktabs}
@@ -24,8 +34,7 @@
 
 \author{%
   Team Uzi\\
-  Course Mini Paper Submission\\
-  \texttt{repo: kaiwu}\\
+  万佳欣\enspace 253108030048 \quad 刘悦\enspace 253108030049\\
 }
 
 \begin{document}
