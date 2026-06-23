@@ -277,8 +277,8 @@ def create_training_progress(run_df: pd.DataFrame) -> None:
     c.setTitle("Training progress")
     margin = 0.45 * inch
     panel_w = 2.9 * inch
-    panel_h = 1.65 * inch
-    y = 0.75 * inch
+    panel_h = 1.45 * inch
+    y = 0.70 * inch
 
     c.setFont("Helvetica-Bold", 13)
     c.setFillColor(PALETTE["ink"])
@@ -309,8 +309,8 @@ def create_lane_pressure(run_df: pd.DataFrame) -> None:
     c = canvas.Canvas(str(path), pagesize=(7.0 * inch, 3.0 * inch))
     margin = 0.45 * inch
     panel_w = 2.9 * inch
-    panel_h = 1.65 * inch
-    y = 0.75 * inch
+    panel_h = 1.45 * inch
+    y = 0.70 * inch
 
     c.setFont("Helvetica-Bold", 13)
     c.setFillColor(PALETTE["ink"])
@@ -344,8 +344,8 @@ def create_recall_diagnostics(run_df: pd.DataFrame, probe_df: pd.DataFrame) -> N
     c = canvas.Canvas(str(path), pagesize=(7.0 * inch, 3.0 * inch))
     margin = 0.45 * inch
     panel_w = 2.9 * inch
-    panel_h = 1.65 * inch
-    y = 0.75 * inch
+    panel_h = 1.45 * inch
+    y = 0.70 * inch
 
     c.setFont("Helvetica-Bold", 13)
     c.setFillColor(PALETTE["ink"])

@@ -214,9 +214,8 @@ class Agent(BaseAgent):
         return d_action
 
     def observation_process(self, observation):
-        observation["recall_channel_active"] = (
-            self.reward_manager is not None
-            and getattr(self.reward_manager, "_recall_channel_steps", 0) > 0
+        observation["retreat_need_active"] = self._retreat_need_feature_active(
+            observation.get("frame_state"),
         )
         feature = self.feature_processes.process_feature(observation)
         feature_vec, legal_action = (
@@ -228,6 +227,22 @@ class Agent(BaseAgent):
         )
 
     def action_process(self, observation, act_data, is_stochastic):
+        if not getattr(GameConfig, "RECALL_ENABLED", False):
+            if is_stochastic:
+                return act_data.action
+            return act_data.d_action
+        if is_stochastic or getattr(GameConfig, "RECALL_HOLD_ASSIST_IN_EVAL", False):
+            assisted_action = self._maybe_hold_active_recall_channel(
+                observation,
+                act_data.action if is_stochastic else act_data.d_action,
+            )
+            if assisted_action is not None:
+                if is_stochastic:
+                    act_data.action = assisted_action
+                else:
+                    act_data.d_action = assisted_action
+                return assisted_action
+
         if is_stochastic:
             # Use stochastic sampling action
             # 采用随机采样动作 action
@@ -296,6 +311,12 @@ class Agent(BaseAgent):
             if need > 0 else 0.0,
             4,
         )
+        hold_active = self._action_mask_stats.get("recall_hold_active_cnt", 0)
+        stats["recall_hold_model_keep_rate"] = round(
+            self._action_mask_stats.get("recall_hold_model_keep_cnt", 0) / hold_active
+            if hold_active > 0 else 0.0,
+            4,
+        )
         stats["recall_explore_button9_prob_avg"] = round(prob_sum / need if need > 0 else 0.0, 6)
         for key in self._action_mask_stats:
             self._action_mask_stats[key] = 0
@@ -313,10 +334,15 @@ class Agent(BaseAgent):
                 "recall_explore_hold_cnt": 0,
                 "recall_explore_forced_legal_cnt": 0,
                 "recall_explore_button9_prob_sum": 0.0,
+                "recall_hold_active_cnt": 0,
+                "recall_hold_model_keep_cnt": 0,
+                "recall_hold_assist_cnt": 0,
             }
         )
 
     def _maybe_apply_recall_exploration(self, observation, action, act_data):
+        if not getattr(GameConfig, "RECALL_ENABLED", False):
+            return action
         if not getattr(GameConfig, "RECALL_EXPLORATION_ENABLED", False):
             return action
         if self.reward_manager is None or observation is None:
@@ -356,7 +382,7 @@ class Agent(BaseAgent):
             self._action_mask_stats["recall_explore_forced_legal_cnt"] += 1
 
         if active:
-            return self._hold_recall_channel(action, legal_actions)
+            return self._hold_recall_channel(action, legal_actions, stats_kind="explore")
 
         if not button9_legal:
             return action
@@ -378,17 +404,48 @@ class Agent(BaseAgent):
             legal_actions[-1],
         )
 
-    def _hold_recall_channel(self, action, legal_actions):
+    def _maybe_hold_active_recall_channel(self, observation, action):
+        if not getattr(GameConfig, "RECALL_ENABLED", False):
+            return None
+        if not getattr(GameConfig, "RECALL_HOLD_ASSIST_ENABLED", False):
+            return None
+        if self.reward_manager is None or observation is None or action is None:
+            return None
+        if getattr(self.reward_manager, "_recall_channel_steps", 0) <= 0:
+            return None
+        legal_action = observation.get("legal_action")
+        if legal_action is None:
+            return None
+
+        hold_prob = getattr(GameConfig, "RECALL_HOLD_ASSIST_PROB", 1.0)
+        if hold_prob < 1.0 and random.random() >= hold_prob:
+            return None
+
+        adjusted_legal = adjust_raw_legal_action_for_button_targets(np.array(legal_action))
+        observation["legal_action"] = adjusted_legal
+        self._action_mask_stats["recall_hold_active_cnt"] += 1
+        if int(action[0]) in (GameConfig.RECALL_BUTTON, GameConfig.RECALL_NOOP_BUTTON):
+            self._action_mask_stats["recall_hold_model_keep_cnt"] += 1
+        return self._hold_recall_channel(
+            action,
+            self._split_legal_action(adjusted_legal),
+            stats_kind="assist",
+        )
+
+    def _hold_recall_channel(self, action, legal_actions, stats_kind="explore"):
         if int(action[0]) in (GameConfig.RECALL_BUTTON, GameConfig.RECALL_NOOP_BUTTON):
             return action
         button_mask = legal_actions[0]
         if not self._button_is_legal(button_mask, GameConfig.RECALL_NOOP_BUTTON):
             return action
-        hold_prob = getattr(GameConfig, "RECALL_EXPLORATION_HOLD_PROB", 1.0)
-        if hold_prob < 1.0 and random.random() >= hold_prob:
-            return action
-        self._action_mask_stats["recall_explore_override_cnt"] += 1
-        self._action_mask_stats["recall_explore_hold_cnt"] += 1
+        if stats_kind == "explore":
+            hold_prob = getattr(GameConfig, "RECALL_EXPLORATION_HOLD_PROB", 1.0)
+            if hold_prob < 1.0 and random.random() >= hold_prob:
+                return action
+            self._action_mask_stats["recall_explore_override_cnt"] += 1
+            self._action_mask_stats["recall_explore_hold_cnt"] += 1
+        else:
+            self._action_mask_stats["recall_hold_assist_cnt"] += 1
         return self._replace_action_button(
             action,
             GameConfig.RECALL_NOOP_BUTTON,
@@ -420,6 +477,29 @@ class Agent(BaseAgent):
             return {"should_recall": should_recall}
         except (KeyError, TypeError, ValueError):
             return None
+
+    def _retreat_need_feature_active(self, frame_state):
+        if self.reward_manager is None or frame_state is None:
+            return False
+        try:
+            main_hero = self.reward_manager._main_hero(frame_state)
+            if main_hero is None:
+                return False
+            main_camp = main_hero.get("camp")
+            if main_camp not in (1, 2):
+                return False
+            main_hero, _ = self.reward_manager._get_camp_units(frame_state, main_camp)
+            enemy_camp = 2 if main_camp == 1 else 1
+            enemy_hero, enemy_tower = self.reward_manager._get_camp_units(frame_state, enemy_camp)
+            return self.reward_manager.calculate_retreat_need(
+                frame_state,
+                main_camp,
+                main_hero,
+                enemy_hero,
+                enemy_tower,
+            ) > 0
+        except (KeyError, TypeError, ValueError):
+            return False
 
     def _replace_action_button(self, action, button, target_legal_action):
         replaced = list(action)

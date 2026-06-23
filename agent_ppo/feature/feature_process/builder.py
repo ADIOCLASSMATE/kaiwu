@@ -147,7 +147,7 @@ class FeatureBuilder:
         return out
 
     # ---- 主入口 ----
-    def build(self, frame_state, recall_channel_active=False):
+    def build(self, frame_state, retreat_need_active=False):
         heroes = frame_state.get("hero_states", [])
         npcs = frame_state.get("npc_states", [])
         bullets = frame_state.get("bullets", []) or []
@@ -235,7 +235,7 @@ class FeatureBuilder:
             enemy_tower,
             enemy_minions,
             monsters,
-            recall_channel_active,
+            retreat_need_active,
         )
 
         assert len(feat) == FC.FEATURE_DIM, "feature len %d != FEATURE_DIM %d" % (
@@ -773,7 +773,7 @@ class FeatureBuilder:
         enemy_tower,
         enemy_minions,
         monsters,
-        recall_channel_active=False,
+        retreat_need_active=False,
     ):
         g = []
         g.append(_clip01(frame_no / 20000.0))
@@ -807,7 +807,7 @@ class FeatureBuilder:
         lvl_adv = (lvl(main_hero) - (lvl(enemy_hero) if evis else 0)) / 15.0
         g.append(_clip01(0.5 * (lvl_adv + 1.0)))
 
-        g.append(1.0 if recall_channel_active else 0.0)
+        g.append(1.0 if retreat_need_active else 0.0)
 
         g.append(1.0 if evis else 0.0)
         g += self._target_availability_feature(

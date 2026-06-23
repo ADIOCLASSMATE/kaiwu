@@ -113,6 +113,7 @@ class GameRewardManager:
         self._lane_cake_anchor_by_camp = {}
         self._lane_progress_sum = 0.0
         self._lane_presence_sum = 0.0
+        self._hp_point_sum = 0.0
         self._retreat_recover_sum = 0.0
         self._recall_recover_sum = 0.0
         self._last_hit_focus_sum = 0.0
@@ -276,7 +277,37 @@ class GameRewardManager:
             invalid_target_penalty = -GameConfig.INVALID_NORMAL_ATTACK_TARGET_PENALTY
             self._invalid_target_penalty_sum += invalid_target_penalty
             penalty += invalid_target_penalty
+        if button in GameConfig.ATTACK_BUTTONS and target in (1, 7):
+            penalty -= self._low_hp_aggressive_action_penalty(
+                target,
+                decided_frame_state,
+            )
         return penalty
+
+    def _low_hp_aggressive_action_penalty(self, target, decided_frame_state):
+        main_hero = self._main_hero(decided_frame_state)
+        if main_hero is None:
+            return 0.0
+        main_camp = main_hero.get("camp")
+        if main_camp not in (1, 2):
+            return 0.0
+        enemy_camp = 2 if main_camp == 1 else 1
+        enemy_hero, enemy_tower = self._get_camp_units(decided_frame_state, enemy_camp)
+        retreat_need = self.calculate_retreat_need(
+            decided_frame_state,
+            main_camp,
+            main_hero,
+            enemy_hero,
+            enemy_tower,
+        )
+        if retreat_need <= 0:
+            return 0.0
+        if target == 7 and self.tower_attack_reward(
+            [3, 0, 0, 0, 0, 7],
+            decided_frame_state,
+        ) > 0:
+            return 0.0
+        return GameConfig.LOW_HP_AGGRESSIVE_ACTION_PENALTY * min(1.0, retreat_need)
 
     def _noop_opportunity_penalty(self, decided_frame_state):
         if not self._is_safe_to_penalize_noop(decided_frame_state):
@@ -322,6 +353,9 @@ class GameRewardManager:
 
     def recall_recover_action_reward(self, action, decided_frame_state):
         """Action-level shaping for low-hp disengaged recall channel."""
+        if not getattr(GameConfig, "RECALL_ENABLED", False):
+            self._recall_channel_steps = 0
+            return 0.0
         if action is None or len(action) < 1:
             return 0.0
         try:
@@ -1283,6 +1317,8 @@ class GameRewardManager:
         enemy_hero,
         enemy_tower,
     ):
+        if not getattr(GameConfig, "RECALL_ENABLED", False):
+            return False
         if (
             main_hero is None
             or main_tower is None
@@ -1487,6 +1523,9 @@ class GameRewardManager:
                 ):
                     threat = max(threat, 1.0)
 
+        if self._behind_own_tower(frame_data, main_hero, main_camp):
+            threat = max(threat, GameConfig.RETREAT_BACKFIELD_THREAT)
+
         if threat <= 0:
             return 0.0
         low_hp_severity = (threshold - hp_ratio) / threshold
@@ -1666,7 +1705,7 @@ class GameRewardManager:
         return -self._targeted_own_minion_damage(previous, current)
 
     def _in_retreat_zone(self, frame_data, hero, main_camp):
-        """英雄是否在己方塔后方的安全回撤/泉水区（回血/回城）。"""
+        """英雄是否在己方塔下安全区；明显跑到塔后不算安全回撤。"""
         hloc = hero.get("location", {})
         if self._is_sentinel(hloc):
             return True
@@ -1682,11 +1721,42 @@ class GameRewardManager:
         hpos = (hloc["x"], hloc["z"])
         opos = (otl["x"], otl["z"])
         epos = (etl["x"], etl["z"])
-        dist_hero_to_enemy = math.hypot(hpos[0] - epos[0], hpos[1] - epos[1])
-        dist_own_to_enemy = math.hypot(opos[0] - epos[0], opos[1] - epos[1])
-        if dist_own_to_enemy <= 0:
+        lane_t = self._lane_projection_t(hpos, opos, epos)
+        if lane_t is None:
             return False
-        return dist_hero_to_enemy > dist_own_to_enemy * IDLE_RETREAT_RATIO
+        tower_range = max(
+            float(own_tower.get("attack_range", 0) or 0),
+            GameConfig.RETREAT_TOWER_SHELTER_MIN_RADIUS,
+        )
+        return (
+            math.hypot(hpos[0] - opos[0], hpos[1] - opos[1]) <= tower_range
+            and GameConfig.RETREAT_TOWER_SHELTER_BACK_T
+            <= lane_t
+            <= GameConfig.RETREAT_TOWER_SHELTER_FRONT_T
+        )
+
+    def _behind_own_tower(self, frame_data, hero, main_camp):
+        if hero is None or self._is_sentinel(hero.get("location", {})):
+            return False
+        _, own_tower = self._get_camp_units(frame_data, main_camp)
+        enemy_camp = 2 if main_camp == 1 else 1
+        _, enemy_tower = self._get_camp_units(frame_data, enemy_camp)
+        if own_tower is None or enemy_tower is None:
+            return False
+        hloc = hero.get("location", {})
+        otl = own_tower.get("location", {})
+        etl = enemy_tower.get("location", {})
+        if self._is_sentinel(otl) or self._is_sentinel(etl):
+            return False
+        lane_t = self._lane_projection_t(
+            (hloc["x"], hloc["z"]),
+            (otl["x"], otl["z"]),
+            (etl["x"], etl["z"]),
+        )
+        return (
+            lane_t is not None
+            and lane_t < GameConfig.RETREAT_TOWER_SHELTER_BACK_T
+        )
 
     def _update_inactive(self, frame_data, main_camp):
         """挂机计数更新（位置 + 产出双重判据 + 回撤/泉水冻结）。"""
@@ -1814,6 +1884,19 @@ class GameRewardManager:
                 )
             elif reward_name == "danger_penalty":
                 rs.value = main.cur_frame_value
+            elif reward_name == "hp_point":
+                damage_dealt_delta = main.cur_frame_value - main.last_frame_value
+                damage_taken_delta = enemy.cur_frame_value - enemy.last_frame_value
+                raw_delta = (
+                    damage_dealt_delta
+                    - GameConfig.HERO_DAMAGE_TAKEN_MULT * damage_taken_delta
+                )
+                rs.value = self._consume_bounded_episode_budget(
+                    raw_delta,
+                    "_hp_point_sum",
+                    GameConfig.HP_POINT_MIN_PER_EPISODE,
+                    GameConfig.HP_POINT_MAX_PER_EPISODE,
+                )
             elif reward_name == "death":
                 rs.value = main.cur_frame_value - main.last_frame_value
             elif reward_name == "last_hit":
@@ -1927,6 +2010,9 @@ class GameRewardManager:
         )
 
     def _recall_recover_delta(self, previous, current):
+        if not getattr(GameConfig, "RECALL_ENABLED", False):
+            self._recall_channel_steps = 0
+            return 0.0
         value = self._recall_action_event
         if not isinstance(previous, dict) or not isinstance(current, dict):
             return self._bounded_recall_value(value)

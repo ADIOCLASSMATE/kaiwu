@@ -61,29 +61,29 @@ class GameConfig:
     # 目标优先的 shaping reward。终局胜负奖励单独配置，避免被时间衰减。
     #
     # 设计目标：
-    #   1. 对线期高频信号（补刀、经济、经验、血量）要稳定压过站撸噪声；
-    #   2. 推塔奖励只作为终局目标的中低频信号，越塔/无兵线硬点塔折价；
+    #   1. 安全换血收益要高于挂机和刷野，但无意义硬打/承伤必须亏；
+    #   2. 推塔/守塔是主目标，塔血变化必须显著强于普通换血；
     #   3. 死亡规避不能只等 dead_cnt 发生后才反馈，低血处在威胁区时给轻量逐帧惩罚。
     REWARD_WEIGHT_DICT = {
-        "tower_hp_point": 1.2,      # 双方外塔血量优势变化，越塔/无兵线推塔时折价
+        "tower_hp_point": 12.0,     # 双方外塔血量优势变化；满塔价值必须压过普通击杀/换血
         "lane_progress": 2.0,       # 安全时泉水到己方神符的前进势能差分，小上限探索引导
         "lane_presence": 1.0,       # 安全前场/兵线存在感；满血后场无产出小惩罚
         "retreat_recover": 1.0,     # 危险局面下合理回撤/回血的小奖励，有整局上限
-        "recall_recover": 1.0,      # 脱战低血时开始/保持回城，成功恢复给小奖励
-        "hp_point": 4.0,            # 英雄对英雄伤害优势变化，只奖励自己打出的压制
+        "recall_recover": 0.0,      # 当前版本禁用回城，保留 key 仅用于兼容监控/旧实验
+        "hp_point": 4.0,            # 安全换血优势变化；承伤按更高倍率扣，防止硬吃伤害刷输出
         "danger_penalty": -1.0,     # 低血仍在敌英雄/敌塔威胁区的逐帧惩罚
         "kill": 4.0,                # 击杀数优势变化；不再与 death 重复计数
-        "death": -6.0,              # 自身死亡增量，直接压制送死捷径
+        "death": -8.0,              # 自身死亡增量，必须压过单次击杀+普通换血
         "money": 0.8,               # 累计经济 money_cnt 优势变化
         "exp": 0.8,                 # 跨等级累计经验优势变化
-        "last_hit": 1.0,            # dead_action 中英雄真实补刀/阻止敌方补刀事件
-        "last_hit_focus": 1.0,      # 补刀窗口内点低血兵的小动作奖励/点错目标小惩罚
-        "minion_hp_point": 0.1,     # 敌方英雄攻击己方兵的小惩罚；不奖励无脑清线
-        "kill_monster": 0.3,        # dead_action 中中立野怪归属
+        "last_hit": 1.1,            # dead_action 中英雄真实补刀/阻止敌方补刀事件
+        "last_hit_focus": 1.1,      # 补刀窗口内点低血兵的小动作奖励/点错目标小惩罚
+        "minion_hp_point": 0.2,     # 敌方英雄攻击己方兵的小惩罚；不奖励无脑清线
+        "kill_monster": 0.2,        # dead_action 中中立野怪归属，低于对线补刀/安全换血
         "idle_penalty": -0.1,       # 长时间停滞后的渐进式每帧惩罚
         "tower_attack": 0.02,       # 安全压塔时选择点塔动作的小奖励
     }
-    TERMINAL_WIN_REWARD = 8.0
+    TERMINAL_WIN_REWARD = 14.0
     TERMINAL_WIN_MIN_QUALITY = 0.40
     TERMINAL_DEATH_DISCOUNT = 0.20
     TERMINAL_LOW_INTERACTION_DISCOUNT = 0.25
@@ -92,6 +92,9 @@ class GameConfig:
     TOWER_NO_MINION_DISCOUNT = 0.15
     TOWER_PUSH_MINION_RADIUS = 6500
     HERO_DAMAGE_REWARD_SCALE = 3000.0
+    HERO_DAMAGE_TAKEN_MULT = 1.25
+    HP_POINT_MAX_PER_EPISODE = 0.55
+    HP_POINT_MIN_PER_EPISODE = -1.2
     # 终局奖励已经提供结束压力；关闭全局时间衰减，保持 shaping 尺度稳定。
     TIME_SCALE_ARG = 0
     MODEL_SAVE_INTERVAL = 1800
@@ -115,11 +118,12 @@ class GameConfig:
     INVALID_NORMAL_ATTACK_TARGET_PENALTY = 0.004
 
     # ---- 低血危险区惩罚 ----
-    DANGER_HP_THRESHOLD = 0.45       # 低于该血量，若仍处于敌方威胁区则开始惩罚
+    DANGER_HP_THRESHOLD = 0.55       # 低于该血量，若仍处于敌方威胁区则开始惩罚
     DANGER_RANGE_MULT = 1.15         # 敌方攻击距离的安全余量
     DANGER_FRAME_SCALE = 1.0 / 30.0  # 逐帧尺度，避免比终局/击杀奖励更尖锐
     # 敌方明显更残时允许低血反打/追击：只豁免敌英雄威胁，不豁免敌塔威胁。
     DANGER_COUNTERPLAY_HP_RATIO = 0.8
+    LOW_HP_AGGRESSIVE_ACTION_PENALTY = 0.02
 
     # ---- 安全上线引导 ----
     # lane_progress 是泉水/后场到己方神符的势能差分，只在健康且安全时启用；
@@ -144,14 +148,19 @@ class GameConfig:
     RETREAT_HEAL_MAX_STEP = 0.20
     RETREAT_HEAL_SCALE = 0.8
     RETREAT_NEED_MEMORY_FRAMES = 300
-    RETREAT_LOW_HP_THRESHOLD = 0.50
+    RETREAT_LOW_HP_THRESHOLD = 0.55
     RETREAT_ENEMY_HP_ADVANTAGE = 0.25
+    RETREAT_TOWER_SHELTER_BACK_T = -0.04
+    RETREAT_TOWER_SHELTER_FRONT_T = 0.18
+    RETREAT_TOWER_SHELTER_MIN_RADIUS = 5000.0
+    RETREAT_BACKFIELD_THREAT = 2.0
 
     # ---- 脱战低血回城 ----
     # 回城是多步 channel 行为，单靠“成功回泉水”很难 rollout 到；因此奖励拆成
     # 开始、保持、打断、恢复成功四段。总量仍小于击杀/推塔收益，只解决低血空挂。
     RECALL_BUTTON = 9
     RECALL_NOOP_BUTTON = 1
+    RECALL_ENABLED = False
     RECALL_LOW_HP_THRESHOLD = 0.45
     RECALL_TARGET_HP = 0.70
     RECALL_ENEMY_FAR_RANGE = 9000.0
@@ -172,6 +181,9 @@ class GameConfig:
     RECALL_EXPLORATION_MAX_STARTS_PER_EPISODE = 3
     RECALL_EXPLORATION_HOLD_PROB = 1.0
     RECALL_EXPLORATION_FORCE_LEGAL = True
+    RECALL_HOLD_ASSIST_ENABLED = False
+    RECALL_HOLD_ASSIST_IN_EVAL = False
+    RECALL_HOLD_ASSIST_PROB = 1.0
 
     # ---- 补刀窗口动作 shaping ----
     LAST_HIT_FOCUS_HP_RATIO = 0.25
@@ -448,12 +460,13 @@ class FeatureConfig:
     # ---- 全局特征（非 token，拼在 token 之后） ----
     # frame_progress, game_time_bucket(5), own_tower_alive, enemy_tower_alive,
     # main_in_enemy_tower_range, enemy_hero_in_my_atk_range, hp_adv, level_adv,
-    # recall_channel_active, enemy_hero_visible, target_availability(5)
+    # retreat_need_active, enemy_hero_visible, target_availability(5)
     GAME_TIME_BUCKETS = (3000, 6000, 9000, 12000)
     GAME_TIME_ONEHOT_DIM = len(GAME_TIME_BUCKETS) + 1
     TARGET_AVAIL_DIM = 5
     GLOBAL_DIM = 1 + GAME_TIME_ONEHOT_DIM + 8 + TARGET_AVAIL_DIM
-    GLOBAL_RECALL_ACTIVE_OFFSET = 1 + GAME_TIME_ONEHOT_DIM + 2 + 2 + 2
+    GLOBAL_RETREAT_NEED_OFFSET = 1 + GAME_TIME_ONEHOT_DIM + 2 + 2 + 2
+    GLOBAL_RECALL_ACTIVE_OFFSET = GLOBAL_RETREAT_NEED_OFFSET
 
     # ---- 总 token 数 / token 特征长度 / 总特征维度 ----
     NUM_TOKENS = sum(count for _, _, count in TOKEN_SEGMENTS)            # 19

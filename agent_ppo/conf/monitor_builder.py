@@ -371,6 +371,10 @@ def build_monitor():
         ("recall_explore_override_cnt", "探索覆盖动作次数", "0.001"),
         ("recall_explore_override_rate", "探索覆盖占比", "0.0001"),
         ("recall_explore_hold_cnt", "探索保持回城次数", "0.001"),
+        ("recall_hold_active_cnt", "回城保持判定次数", "0.001"),
+        ("recall_hold_model_keep_cnt", "模型自行保持回城次数", "0.001"),
+        ("recall_hold_model_keep_rate", "模型自行保持回城占比", "0.0001"),
+        ("recall_hold_assist_cnt", "回城保持辅助次数", "0.001"),
         ("recall_explore_button9_prob_avg", "回城按钮模型概率", "0.000001"),
     ]
     builder = builder.add_group(group_name="回城检测", group_name_en="recall_health")

@@ -69,9 +69,9 @@ def adjust_raw_legal_action_for_button_targets(legal_action, return_stats=False)
     expected_compressed = sum(Config.LABEL_SIZE_LIST)
     flat = adjusted.reshape(-1)
     if flat.size == expected_compressed:
-        _enable_recall_button(flat)
+        _apply_recall_button_policy(flat)
         target_offset = sum(Config.LABEL_SIZE_LIST[:-1])
-        if target_offset < flat.size:
+        if getattr(GameConfig, "RECALL_ENABLED", False) and target_offset < flat.size:
             flat[target_offset + TARGET_NONE] = 1
         return (adjusted, stats) if return_stats else adjusted
     if flat.size != expected_raw:
@@ -82,9 +82,11 @@ def adjust_raw_legal_action_for_button_targets(legal_action, return_stats=False)
     button_mask = flat[:button_size]
     target_matrix = flat[-raw_target_size:].reshape(button_size, target_size)
 
-    _enable_recall_button(button_mask)
-    if RECALL_BUTTON < button_size:
+    _apply_recall_button_policy(button_mask)
+    if getattr(GameConfig, "RECALL_ENABLED", False) and RECALL_BUTTON < button_size:
         target_matrix[RECALL_BUTTON, TARGET_NONE] = 1
+    elif RECALL_BUTTON < button_size:
+        target_matrix[RECALL_BUTTON, :] = 0
 
     b = NORMAL_ATTACK_BUTTON
     if button_mask[b] > 0:
@@ -108,9 +110,9 @@ def adjust_raw_legal_action_for_button_targets(legal_action, return_stats=False)
     return (adjusted, stats) if return_stats else adjusted
 
 
-def _enable_recall_button(button_mask):
+def _apply_recall_button_policy(button_mask):
     if RECALL_BUTTON < button_mask.size:
-        button_mask[RECALL_BUTTON] = 1
+        button_mask[RECALL_BUTTON] = 1 if getattr(GameConfig, "RECALL_ENABLED", False) else 0
 
 
 def action_mask_stats_rates(stats):

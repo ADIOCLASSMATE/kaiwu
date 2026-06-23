@@ -18,7 +18,7 @@
 
 \hypersetup{hidelinks}
 
-\graphicspath{{../figures/}}
+\graphicspath{{../figures/}{../poster/images/selected/}}
 
 \title{Training Uzi: PPO for Lane-Dominant 1v1 Honor of Kings Agents}
 
@@ -59,7 +59,7 @@ Our contributions are:
 
 \begin{figure}[t]
   \centering
-  \includegraphics[width=\linewidth]{architecture.pdf}
+  \includegraphics[width=\linewidth]{policy_architecture.pdf}
   \caption{The Uzi policy uses structured entity tokens and global state, fuses them with a raw MLP pathway, applies an LSTM residual, and predicts multi-discrete actions. The target logits are conditioned on the selected top-level button, so target slots are interpreted in the same context as the chosen action. Generated 2D components provide visual icons; the module flow is drawn from the actual code path.}
   \label{fig:architecture}
 \end{figure}
@@ -70,7 +70,7 @@ We train in the Honor of Kings 1v1 lane environment with three heroes in the cur
 \[
   a_t = (b_t, m^x_t, m^z_t, s^x_t, s^z_t, g_t),
 \]
-where $b_t$ is the button, the middle four heads parameterize movement or skill direction, and $g_t$ is a target slot among None, enemy hero, self, Soldier1--4, tower, and monster. The legal-action vector has two forms in the codebase: a compressed 85-dimensional form and a raw 184-dimensional form in which target legality can depend on the selected button. This detail was central. For example, normal attack with target None or Self is legal-looking in the independent target head but semantically useless. Later versions therefore apply a button-conditioned action-mask adjustment before sampling.
+where $b_t$ is the button, the middle four heads parameterize movement or skill direction, and $g_t$ is a target slot among None, enemy hero, self, Soldier1--4, tower, and monster. In the submitted code, the label sizes are $[12,16,16,16,16,9]$. The legal-action vector has two forms: a compressed 85-dimensional form and a raw 184-dimensional form in which target legality can depend on the selected button. This detail was central. For example, normal attack with target None or Self is legal-looking in the independent target head but semantically useless. Later versions therefore apply a button-conditioned action-mask adjustment before sampling: Button3 loses None/Self targets, Button3 itself is disabled if no entity target remains, and Button9 recall is masked out in the final configuration.
 
 We evaluate evidence at three levels. First, the course leaderboard is the external result: rank 3, 131/67 over 198 games, or 66.2\% aggregate win rate. Second, platform training logs report monitor metrics for individual PPO runs; the final pulled run, \texttt{ppo-5-1}, reached 96,091 learner steps and 20,485 episodes with latest logged win rate 68.8\%. Third, we use synthetic frame probes across historical commits to diagnose code behavior. These probes are not match evaluations; they are deterministic unit-style tests that answer questions such as whether a historical version suppresses invalid Button3 targets.
 
@@ -78,16 +78,36 @@ We evaluate evidence at three levels. First, the course leaderboard is the exter
 
 \subsection{Structured observation design}
 
-Figure~\ref{fig:features} shows the feature pipeline. The final feature vector is 561-dimensional. Its main block is a fixed set of entity tokens:
-main hero, enemy hero, own and enemy outer towers, four own minions, four enemy minions, one monster, four bullets, and two cakes. A global block stores scalar context such as retreat or recall state. Each token begins with an \texttt{exists} bit used only for padding. Visibility, alive state, time since seen, hero identity, skill state, attack-target relations, bullets, and selected hero-specific mechanics are ordinary features rather than padding gates.
+Figure~\ref{fig:features} shows the feature pipeline. The final feature vector is 561-dimensional: 542 dimensions from typed entity tokens and 19 dimensions from global context. The token layout is fixed:
+main hero, enemy hero, own and enemy outer towers, four own minions, four enemy minions, one monster, four bullets, and two cakes. Each token begins with an \texttt{exists} bit used only for padding. Visibility, alive state, time since seen, hero identity, skill state, attack-target relations, bullets, and selected hero-specific mechanics are ordinary features rather than padding gates.
+
+\begin{table}[t]
+  \centering
+  \caption{Feature layout implemented in \texttt{FeatureConfig}. Token dimensions are padded into a shared 542-dimensional token block before the 19-dimensional global block is appended.}
+  \label{tab:feature-layout}
+  \small
+  \begin{tabular}{lrrl}
+    \toprule
+    Token family & Count & Native dim. & Main fields \\
+    \midrule
+    Hero & 2 & 124 & HP/EP, hero id, position, skills, target state, equipment \\
+    Outer tower & 2 & 17 & HP, position, visibility, attack target \\
+    Soldier/minion & 8 & 22 & HP, camp, target slot order, Arli mark, relative position \\
+    Monster & 1 & 8 & Resource monster presence, HP, position \\
+    Bullet & 4 & 16 & Source camp/hero, slot type, position, velocity \\
+    Cake/rune & 2 & 6 & Lane-side pickup presence and position \\
+    Global & 1 & 19 & Time, tower state, range flags, HP/level advantage, retreat need \\
+    \bottomrule
+  \end{tabular}
+\end{table}
 
 Two details mattered in practice. First, Soldier1--4 target slots are not arbitrary minion order. Environment probes showed that the correct rule is to select visible alive enemy soldiers, choose the nearest four, and then order the selected set by ascending runtime id. This ordering is shared by feature construction, reward target resolution, and target-pointer slots. Second, Gongsun Li has mark state that appears not only on heroes but also on minions. The probe archive observed mark \texttt{19900} with layers 0--3, so the final minion token includes an Arli mark presence/layer pair. This made the failure diagnosable even though it did not fully solve her.
 
 \subsection{Policy and PPO objective}
 
-Figure~\ref{fig:architecture} summarizes the model. A raw MLP pathway preserves direct access to all feature fields. In parallel, entity tokens are projected by type and processed with small AdaLN-conditioned attention blocks. Register tokens summarize the entity set, and a global MLP summarizes scalar context. The structured state is added as a residual to the raw state. A one-layer LSTM residual then gives the policy short-horizon memory for cooldowns, channeling, target disappearance, and recent movement.
+Figure~\ref{fig:architecture} summarizes the model. A raw MLP pathway with hidden sizes $[256,256]$ preserves direct access to all feature fields. In parallel, entity tokens are projected into a 128-dimensional embedding space by entity type and processed by two AdaLN-conditioned attention blocks with four heads. Two learnable register tokens summarize the entity set, while a global MLP maps the 19 scalar global features into a 64-dimensional context. The structured state is fused into a 256-dimensional public state and added as a gated residual to the raw state. A 512-unit one-layer LSTM residual then gives the policy short-horizon memory for cooldowns, channeling, target disappearance, and recent movement.
 
-The first five action heads use independent categorical logits. The target head is button-conditioned: the policy forms a query from the public state plus a button embedding, then scores target-slot keys derived from entity tokens. During training, the loss gathers target logits for the selected button, so PPO updates the target distribution in the same conditional space used by sampling.
+The first five action heads use independent categorical logits. The target head is button-conditioned: the policy forms a query from the public state plus a button embedding, then scores target-slot keys derived from entity tokens, with a learned null key for the None slot. During training, the loss gathers target logits for the selected button, so PPO updates the target distribution in the same conditional space used by sampling. During inference, \texttt{Agent.\_sample\_masked\_action} first samples or greedily selects the button, then applies the corresponding row of the raw button--target legal matrix before choosing the target. This makes ``attack tower'', ``normal attack minion'', and ``recall None'' different target distributions rather than one shared nine-way target classifier.
 
 We use the clipped PPO objective \citep{schulman2017ppo} with a value baseline and entropy regularization:
 \[
@@ -103,9 +123,11 @@ where advantages are computed in the platform workflow using generalized-advanta
 
 \subsection{Reward shaping and curriculum}
 
-The reward is target-first. It combines zero-sum differences in tower HP, hero HP trades, kills, money, and experience with non-zero-sum action and lane terms: lane progress, lane presence, retreat recovery, last-hit events, last-hit focus, tower-attack action reward, low-health danger penalty, out-of-range attack penalty, invalid normal-attack penalty, no-op opportunity penalty, idle penalty, and terminal win quality. We intentionally keep action-level shaping small. It should break ties and remove pathological behavior, not dominate tower and kill objectives.
+The reward is target-first. It combines zero-sum differences in tower HP, hero HP trades, kills, money, and experience with non-zero-sum action and lane terms: lane progress, lane presence, retreat recovery, last-hit events, last-hit focus, tower-attack action reward, low-health danger penalty, out-of-range attack penalty, invalid normal-attack penalty, no-op opportunity penalty, idle penalty, and terminal win quality. The final configuration puts the largest weights on tower HP advantage, terminal win quality, death avoidance, hero HP trading, and lane control; action-level shaping is deliberately small. It should break ties and remove pathological behavior, not dominate tower and kill objectives.
 
-The training workflow cycles heroes 112, 133, and 199 across both camps and dynamically mixes self-play with common AI opponents. If the policy is weak against common AI, the workflow shifts more training episodes toward common AI; if it starts winning, it restores more self-play. This curriculum kept the policy from overfitting only to its current self while still letting aggressive lane patterns sharpen through mirror play.
+The reward implementation also records why an action was penalized. A normal attack can be penalized for selecting None/Self, an attack can be penalized by distance buckets, and no-op can be penalized only in safe opportunity windows such as enemy-in-range, last-hit, or frontline states. Safe tower attack reward is gated by in-range tower targeting, minion pressure on the enemy tower, and absence of low-health danger. These gates are why the paper treats reward as a semantic design, not just a scalar curve.
+
+The training workflow cycles heroes 112, 133, and 199 across both camps and dynamically mixes self-play with common AI opponents. If the policy is weak against common AI, the workflow shifts more training episodes toward common AI; if it starts winning, it restores more self-play. The monitor builder reports the resulting opponent mix, hero mix, reward components, feature health, action distributions, target joint distributions, mask repair rates, entropy per head, advantage statistics, and gradient health. This curriculum kept the policy from overfitting only to its current self while still letting aggressive lane patterns sharpen through mirror play.
 
 \begin{figure}[t]
   \centering
@@ -125,9 +147,9 @@ The training workflow cycles heroes 112, 133, and 199 across both camps and dyna
   \hfill
   \begin{minipage}{0.57\linewidth}
     \centering
-    \includegraphics[width=\linewidth]{training_progress.pdf}
+    \includegraphics[width=\linewidth]{lane_pressure.pdf}
   \end{minipage}
-  \caption{External and internal performance evidence. The leaderboard result is the main final result: rank 3, 131/67 over 198 games. The training plot shows pulled monitor values across local PPO tasks; \texttt{ppo-5-1} is the final submitted training run in the local logs.}
+  \caption{External and behavioral performance evidence. The leaderboard result is the main final result: rank 3, 131/67 over 198 games. The lane-pressure plot is more faithful than a total reward curve because it separates own tower HP, enemy tower HP, and kill-death behavior.}
   \label{fig:performance}
 \end{figure}
 
@@ -154,16 +176,32 @@ The training workflow cycles heroes 112, 133, and 199 across both camps and dyna
 
 Figure~\ref{fig:performance} and Table~\ref{tab:runs} show the two main quantitative views. The leaderboard result is lower than the best single logged monitor run, which is expected because the leaderboard is a broader external evaluation rather than a latest-window training monitor. The final local run, \texttt{ppo-5-1}, reports 68.8\% latest win rate, 2.30 kills, 0.92 deaths, 7406 self tower HP, 3411 enemy tower HP, and zero recall actions in the latest monitor window. The zero Button9 count is intentional: after recall experiments, the final configuration disabled recall and returned to a simpler lane-pressure policy.
 
-\begin{figure}[t]
-  \centering
-  \includegraphics[width=0.82\linewidth]{lane_pressure.pdf}
-  \caption{Lane pressure metrics across PPO runs. Uzi's intended style appears in the combination of preserving own tower HP, reducing enemy tower HP, and maintaining a positive kill-death gap.}
-  \label{fig:lane-pressure}
-\end{figure}
+We do not use the total reward curve as the primary result. Across runs, the scalar reward changes when reward weights, recall availability, action penalties, and opponent mix change; monitor points are latest-window summaries from separate training tasks rather than a single stationary learning curve. This is why a reward plot can appear to decline even when the stable indicators are acceptable. For this project, tower HP, kill-death balance, external leaderboard win rate, and action diagnostics are more trustworthy than connecting total reward points across nonidentical runs.
 
-The strongest logged training window was \texttt{ppo-0-11}, with 84.4\% monitor win rate and enemy tower HP near 748. Later runs traded peak monitor reward for multi-hero robustness, recall experiments, and final simplification. This is visible in Figure~\ref{fig:lane-pressure}: tower and kill-death metrics remain positive, but recall-enabled runs introduce noise and lower final HP. This shaped our final story: Uzi should be judged as a strong lane-pressure agent, not as a complete MOBA agent with every macro mechanic.
+The strongest logged training window was \texttt{ppo-0-11}, with 84.4\% monitor win rate and enemy tower HP near 748. Later runs traded peak monitor reward for multi-hero robustness, recall experiments, and final simplification. This is visible in Figure~\ref{fig:performance}: tower and kill-death metrics remain positive, but recall-enabled runs introduce noise and lower final HP. This shaped our final story: Uzi should be judged as a strong lane-pressure agent, not as a complete MOBA agent with every macro mechanic.
 
 \section{Case studies}
+
+Table~\ref{tab:commit-timeline} summarizes the commit history that shaped the final paper narrative. The important pattern is that the strongest changes were semantic: moving features and rewards into PPO ownership, making targets conditional on buttons, adding monitors before tuning, and then removing recall when the evidence did not support it.
+
+\begin{table}[t]
+  \centering
+  \caption{Selected commits used as evidence for the paper narrative.}
+  \label{tab:commit-timeline}
+  \small
+  \begin{tabular}{@{}l>{\raggedright\arraybackslash}p{0.30\linewidth}>{\raggedright\arraybackslash}p{0.40\linewidth}@{}}
+    \toprule
+    Commit & Change & Paper relevance \\
+    \midrule
+    \texttt{436d5ad} & Swap PPO to DIY features & Start of structured feature migration \\
+    \texttt{7b86846} & Add hybrid PPO encoder & Raw MLP + token encoder model \\
+    \texttt{f5ce14f} & PPO owns features/rewards & Unified feature, reward, and target helper code \\
+    \texttt{4c07829} & PPO training observability & Monitors for reward, masks, actions, and feature health \\
+    \texttt{a824774--840fd3e} & Recall shaping and state & Negative result: recall engineered but disabled \\
+    \texttt{590cb8f} & Poster asset exports & High-resolution diagrams for paper and poster \\
+    \bottomrule
+  \end{tabular}
+\end{table}
 
 \subsection{Case study 1: target semantics were a hidden bottleneck}
 
