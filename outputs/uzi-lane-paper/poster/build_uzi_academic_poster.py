@@ -8,6 +8,8 @@ from pathlib import Path
 from PIL import Image
 from reportlab.lib import colors
 from reportlab.lib.utils import ImageReader
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.pdfgen import canvas
 
@@ -28,6 +30,8 @@ NAVY = colors.HexColor("#1F4E79")
 GOLD = colors.HexColor("#D8A31A")
 LINE = colors.HexColor("#d6d6d6")
 WHITE = colors.white
+
+pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
 
 
 def draw_wrapped(
@@ -118,9 +122,9 @@ def draw_title(c: canvas.Canvas) -> None:
     c.drawString(108, H - 375, "1v1 Honor of Kings Agents")
     c.setFont("Times-Bold", 31)
     c.drawString(108, H - 435, "Team Uzi")
-    c.setFont("Helvetica", 23)
+    c.setFont("STSong-Light", 25)
     c.setFillColor(colors.HexColor("#EAF7F5"))
-    c.drawString(108, H - 485, "Feature semantics, pointer policy, staged curriculum, and verified lane pressure")
+    c.drawString(108, H - 485, "万佳欣 253108030048    刘悦 253108030049")
 
 
 def draw_footer(c: canvas.Canvas) -> None:
